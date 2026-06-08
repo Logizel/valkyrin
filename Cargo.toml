@@ -1,0 +1,3 @@
+[workspace]
+members = ["valkyrin-cli", "valkyrin-core", "valkyrin-server"]
+resolver = "2"

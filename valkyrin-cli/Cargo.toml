@@ -1,0 +1,8 @@
+[package]
+name = "valkyrin-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+valkyrin-core = { path = "../valkyrin-core" }
+valkyrin-server = { path = "../valkyrin-server" }
