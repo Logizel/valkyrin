@@ -1,3 +1,9 @@
 [workspace]
 members = ["valkyrin-cli", "valkyrin-core", "valkyrin-server"]
 resolver = "2"
+[profile.release]
+opt-level = "z"   # Optimize heavily for size (compresses loops and inline functions)
+lto = "fat"       # Fat Link-Time Optimization (analyzes the entire dependency tree to delete unused code)
+codegen-units = 1 # Forces Rust to compile serially, allowing maximum possible optimization across crates
+panic = "abort"   # Removes stack-unwinding code. Because we intercept panics manually, we don't need this overhead.
+strip = true      # Strips all internal debug symbols and memory maps from the final binary
