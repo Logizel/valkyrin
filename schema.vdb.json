@@ -1,28 +1,72 @@
 {
   "relations": [
     {
-      "id": "xy-edge__2-1",
-      "relation_type": "1:N",
-      "source_table_id": "2",
-      "target_table_id": "1"
-    },
-    {
       "id": "xy-edge__1-2",
       "relation_type": "1:N",
       "source_table_id": "1",
       "target_table_id": "2"
+    },
+    {
+      "id": "xy-edge__2-1",
+      "relation_type": "1:N",
+      "source_table_id": "2",
+      "target_table_id": "1"
     }
   ],
   "tables": [
     {
-      "columns": [],
+      "columns": [
+        {
+          "id": "col_1",
+          "is_nullable": false,
+          "is_primary": true,
+          "name": "id",
+          "raw_type": "uuid"
+        },
+        {
+          "id": "41537b40-25a2-438e-a32a-6644dfb9851f",
+          "is_nullable": false,
+          "is_primary": false,
+          "name": "name",
+          "raw_type": "string"
+        },
+        {
+          "id": "ef4d1790-a2ab-4639-bdc7-22bf95a61ed6",
+          "is_nullable": false,
+          "is_primary": false,
+          "name": "time",
+          "raw_type": "datetime"
+        }
+      ],
       "id": "1",
-      "name": "Users Table"
+      "name": "Users"
     },
     {
-      "columns": [],
+      "columns": [
+        {
+          "id": "col_2",
+          "is_nullable": false,
+          "is_primary": false,
+          "name": "session_token",
+          "raw_type": "string"
+        },
+        {
+          "id": "9e1069b4-43ea-4f55-bf91-f9ae273d394d",
+          "is_nullable": false,
+          "is_primary": false,
+          "name": "model",
+          "raw_type": "string"
+        },
+        {
+          "id": "97553266-73d3-4f20-98d2-ed1e1103a26d",
+          "is_nullable": false,
+          "is_primary": false,
+          "name": "tokens_consumed",
+          "raw_type": "int"
+        }
+      ],
       "id": "2",
-      "name": "Sessions Table"
+      "name": "Sessions"
     }
   ]
 }
