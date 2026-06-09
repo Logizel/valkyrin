@@ -11,6 +11,7 @@ type Users struct {
 	Id uuid.UUID `gorm:"column:id;primaryKey" json:"id"`
 	Name string `gorm:"column:name" json:"name"`
 	Time time.Time `gorm:"column:time" json:"time"`
+	Sessions_id *string `gorm:"column:sessions_id" json:"sessions_id"`
 }
 
 
@@ -19,7 +20,12 @@ type Users struct {
 // DO NOT DELETE. Add your custom methods below.
 // ==============================================
 
+// DO NOT DELETE. Add your custom methods below.
+// ==============================================
 
+
+
+//
 
 // valkyrin:custom_methods_end
 // ==============================================

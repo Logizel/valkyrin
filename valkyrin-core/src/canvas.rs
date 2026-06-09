@@ -31,10 +31,13 @@ pub struct CanvasRelation {
     pub relation_type: String, // "1:1", "1:N", "M:N"
 }
 
-use crate::ir::{Constraints, DataType, Entity, EntityGraph, Field, IntSize};
+use crate::ir::{
+    Connection, Constraints, DataType, Entity, EntityGraph, Field, IntSize, RelationType,
+};
+
+// ... (Keep your struct definitions exactly as they are)
 
 impl CanvasPayload {
-    /// Transforms the raw visual UI data into the strict Rust compiler memory map.
     pub fn to_ir(&self) -> EntityGraph {
         let mut entities = Vec::new();
 
@@ -42,7 +45,6 @@ impl CanvasPayload {
             let mut fields = Vec::new();
 
             for col in &table.columns {
-                // Map frontend string types to safe Rust Enums
                 let data_type = match col.raw_type.as_str() {
                     "string" => DataType::String { max_length: None },
                     "int" | "integer" => DataType::Integer(IntSize::Standard),
@@ -50,7 +52,7 @@ impl CanvasPayload {
                     "datetime" => DataType::DateTime,
                     "json" => DataType::Json,
                     "uuid" => DataType::Uuid,
-                    _ => DataType::Text, // Fallback
+                    _ => DataType::Text,
                 };
 
                 fields.push(Field {
@@ -67,14 +69,30 @@ impl CanvasPayload {
 
             entities.push(Entity {
                 id: table.id.clone(),
-                name: table.name.clone(), // e.g., "Users Table"
+                name: table.name.clone(),
                 fields,
+            });
+        }
+
+        // NEW: Parse the relationships from the canvas
+        let mut connections = Vec::new();
+        for rel in &self.relations {
+            let multiplicity = match rel.relation_type.as_str() {
+                "1:1" => RelationType::OneToOne,
+                "M:N" | "N:M" => RelationType::ManyToMany,
+                _ => RelationType::OneToMany, // Default 1:N
+            };
+
+            connections.push(Connection {
+                source_entity_id: rel.source_table_id.clone(),
+                target_entity_id: rel.target_table_id.clone(),
+                multiplicity,
             });
         }
 
         EntityGraph {
             entities,
-            connections: vec![], // Relations logic will be mapped here later
+            connections,
         }
     }
 }

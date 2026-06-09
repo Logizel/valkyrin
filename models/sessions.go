@@ -10,6 +10,7 @@ type Sessions struct {
 	Session_token string `gorm:"column:session_token" json:"session_token"`
 	Model string `gorm:"column:model" json:"model"`
 	Tokens_consumed int `gorm:"column:tokens_consumed" json:"tokens_consumed"`
+	Users_id *string `gorm:"column:users_id" json:"users_id"`
 }
 
 
@@ -18,7 +19,12 @@ type Sessions struct {
 // DO NOT DELETE. Add your custom methods below.
 // ==============================================
 
+// DO NOT DELETE. Add your custom methods below.
+// ==============================================
 
+
+
+//
 
 // valkyrin:custom_methods_end
 // ==============================================
