@@ -1,13 +1,13 @@
 // valkyrin-server/src/lib.rs
 use axum::{
+    Router,
     body::Body,
-    http::{header, Response, StatusCode},
+    http::{Response, StatusCode, header},
     response::IntoResponse,
     routing::get,
-    Router,
 };
 // Fix: Bring the explicit structural Embed trait module scope forward
-use rust_embed::{Embed, RustEmbed};
+use rust_embed::RustEmbed;
 
 #[derive(RustEmbed)]
 #[folder = "../valkyrin-ui/dist/"]
