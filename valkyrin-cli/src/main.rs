@@ -22,45 +22,32 @@ enum Commands {
 #[tokio::main]
 async fn main() {
     // 1. The Panic Boundary
-    // Intercepts fatal thread crashes and replaces the ugly Rust stack trace
-    // with a highly readable, color-coded terminal message.
     panic::set_hook(Box::new(|info| {
         eprintln!("\n{}", " FATAL SYSTEM ERROR ".on_red().white().bold());
-
+        
         if let Some(s) = info.payload().downcast_ref::<&str>() {
             eprintln!("\n{} {}", "Reason:".red().bold(), s);
         } else if let Some(s) = info.payload().downcast_ref::<String>() {
             eprintln!("\n{} {}", "Reason:".red().bold(), s);
         }
-
+        
         if let Some(location) = info.location() {
-            eprintln!(
-                "{} {}:{}",
-                "Location:".yellow(),
-                location.file(),
-                location.line()
-            );
+            eprintln!("{} {}:{}", "Location:".yellow(), location.file(), location.line());
         }
-
-        eprintln!(
-            "\n{}",
-            "Please report this bug on the Valkyrin GitHub repository.".dimmed()
-        );
+        
+        eprintln!("\n{}", "Please report this bug on the Valkyrin GitHub repository.".dimmed());
         std::process::exit(1);
     }));
 
     let cli = Cli::parse();
 
     // 2. The Expected Error Boundary
-    // Catches standard Results (e.g., File Not Found, Database Offline)
     if let Err(e) = execute_command(cli.command).await {
         eprintln!("\n{} {}", "Error:".red().bold(), e);
-
-        // Print the cascade of underlying errors if they exist
-        let mut cause = e.source();
-        while let Some(err) = cause {
-            eprintln!("  {} {}", "↳".dimmed(), err);
-            cause = err.source();
+        
+        // Print the cascade of underlying errors using anyhow's chain iterator
+        for cause in e.chain().skip(1) {
+            eprintln!("  {} {}", "↳".dimmed(), cause);
         }
         std::process::exit(1);
     }
@@ -70,28 +57,22 @@ async fn execute_command(command: Commands) -> Result<()> {
     match command {
         Commands::Init => {
             println!("{} Initializing Valkyrin workspace...", "=>".green().bold());
-            // Initialization logic
+            // TODO: Call valkyrin_core::init()
         }
         Commands::Canvas => {
-            println!(
-                "{} Booting Canvas on http://localhost:3000...",
-                "=>".blue().bold()
-            );
-            // Server boot logic
+            println!("{} Booting Canvas on http://localhost:3000...", "=>".blue().bold());
+            println!("{} Press CTRL+C to stop the server.", "=>".dimmed());
+            
+            // Execute the server bootloader from our isolated server crate
+            valkyrin_server::start_server(3000).await?;
         }
         Commands::Generate => {
-            println!(
-                "{} Compiling blueprint to structural code...",
-                "=>".magenta().bold()
-            );
-            // Code generation logic
+            println!("{} Compiling blueprint to structural code...", "=>".magenta().bold());
+            // TODO: Call valkyrin_core::ast::CodeMerger
         }
         Commands::Sync => {
-            println!(
-                "{} Synchronizing with live database catalog...",
-                "=>".cyan().bold()
-            );
-            // Database polling logic
+            println!("{} Synchronizing with live database catalog...", "=>".cyan().bold());
+            // TODO: Call valkyrin_core::sync::PostgresIntrospector
         }
     }
     Ok(())

@@ -44,3 +44,15 @@ fn serve_asset(path: &str) -> Response<Body> {
             .unwrap(),
     }
 }
+
+/// Seizes a local network port and boots the Axum server to serve the embedded React canvas.
+pub async fn start_server(port: u16) -> std::io::Result<()> {
+    let app = create_router();
+    let addr = format!("127.0.0.1:{}", port);
+
+    // Bind to the local TCP port
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    // Start the server loop
+    axum::serve(listener, app).await
+}
