@@ -1,0 +1,28 @@
+{
+  "relations": [
+    {
+      "id": "xy-edge__2-1",
+      "relation_type": "1:N",
+      "source_table_id": "2",
+      "target_table_id": "1"
+    },
+    {
+      "id": "xy-edge__1-2",
+      "relation_type": "1:N",
+      "source_table_id": "1",
+      "target_table_id": "2"
+    }
+  ],
+  "tables": [
+    {
+      "columns": [],
+      "id": "1",
+      "name": "Users Table"
+    },
+    {
+      "columns": [],
+      "id": "2",
+      "name": "Sessions Table"
+    }
+  ]
+}

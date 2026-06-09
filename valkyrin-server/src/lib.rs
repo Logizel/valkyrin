@@ -2,12 +2,13 @@
 use axum::{
     Router,
     body::Body,
+    extract::Json,
     http::{Response, StatusCode, header},
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
-// Fix: Bring the explicit structural Embed trait module scope forward
 use rust_embed::RustEmbed;
+use std::fs;
 
 #[derive(RustEmbed)]
 #[folder = "../valkyrin-ui/dist/"]
@@ -15,8 +16,36 @@ struct Assets;
 
 pub fn create_router() -> Router {
     Router::new()
+        .route("/api/save", post(save_blueprint)) // NEW: The API bridge endpoint
         .route("/", get(serve_index))
         .route("/{*path}", get(serve_assets))
+}
+
+/// Receives the JSON payload from React and writes it to the local disk.
+async fn save_blueprint(Json(payload): Json<serde_json::Value>) -> impl IntoResponse {
+    // Format the JSON beautifully so it looks clean in the user's Git commits
+    let pretty_json = match serde_json::to_string_pretty(&payload) {
+        Ok(json) => json,
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to serialize payload",
+            )
+                .into_response();
+        }
+    };
+
+    // Write the JSON directly to the user's current directory
+    match fs::write("schema.vdb.json", pretty_json) {
+        Ok(_) => {
+            println!("💾 Schema successfully saved to disk.");
+            (StatusCode::OK, "Saved").into_response()
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to write schema to disk: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Failed to write to disk").into_response()
+        }
+    }
 }
 
 async fn serve_index() -> impl IntoResponse {
@@ -28,7 +57,6 @@ async fn serve_assets(axum::extract::Path(path): axum::extract::Path<String>) ->
 }
 
 fn serve_asset(path: &str) -> Response<Body> {
-    // Fix: Validated through Embed trait linkage interface logic
     match Assets::get(path) {
         Some(content) => {
             let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -45,14 +73,9 @@ fn serve_asset(path: &str) -> Response<Body> {
     }
 }
 
-/// Seizes a local network port and boots the Axum server to serve the embedded React canvas.
 pub async fn start_server(port: u16) -> std::io::Result<()> {
     let app = create_router();
     let addr = format!("127.0.0.1:{}", port);
-
-    // Bind to the local TCP port
     let listener = tokio::net::TcpListener::bind(&addr).await?;
-
-    // Start the server loop
     axum::serve(listener, app).await
 }
