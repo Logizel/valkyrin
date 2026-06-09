@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod canvas;
+pub mod codegen;
 pub mod ir;
 pub fn add(left: u64, right: u64) -> u64 {
     left + right
