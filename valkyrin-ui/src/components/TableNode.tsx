@@ -2,10 +2,18 @@ import { Handle, Position } from "@xyflow/react";
 
 export default function TableNode({ id, data, isConnectable }: any) {
   return (
-    <div className="bg-gray-800 border-2 border-gray-600 rounded-lg w-64 shadow-xl text-white font-sans">
+    <div className="bg-gray-800 border-2 border-gray-600 rounded-lg w-64 shadow-xl text-white font-sans group">
       {/* Table Header */}
-      <div className="bg-gray-700 p-2 rounded-t-md font-bold text-center border-b border-gray-600">
+      <div className="bg-gray-700 p-2 rounded-t-md font-bold text-center border-b border-gray-600 relative">
         {data.label}
+        {/* Delete Table Button - Appears on Hover */}
+        <button
+          onClick={() => data.onDeleteTable(id)}
+          className="absolute right-2 top-1.5 text-xs text-red-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity font-bold"
+          title="Delete Table"
+        >
+          ✕
+        </button>
       </div>
 
       {/* Column List */}
@@ -13,13 +21,23 @@ export default function TableNode({ id, data, isConnectable }: any) {
         {data.columns?.map((col: any) => (
           <div
             key={col.id}
-            className="flex justify-between text-xs bg-gray-900 p-1.5 rounded"
+            className="flex justify-between items-center text-xs bg-gray-900 p-1.5 rounded group/col"
           >
-            <span className="font-mono text-blue-300">
-              {col.is_primary && "🔑 "}
-              {col.name}
-            </span>
-            <span className="text-gray-400">{col.raw_type}</span>
+            <div className="flex gap-2">
+              <span className="font-mono text-blue-300">
+                {col.is_primary && "🔑 "}
+                {col.name}
+              </span>
+              <span className="text-gray-400">{col.raw_type}</span>
+            </div>
+            {/* Delete Column Button - Appears on Hover */}
+            <button
+              onClick={() => data.onDeleteColumn(id, col.id)}
+              className="text-red-400 hover:text-red-500 opacity-0 group-hover/col:opacity-100 transition-opacity font-bold px-1"
+              title="Delete Column"
+            >
+              ✕
+            </button>
           </div>
         ))}
 

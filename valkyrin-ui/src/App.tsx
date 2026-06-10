@@ -12,7 +12,6 @@ import type { Connection, Edge, Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import TableNode from "./components/TableNode";
 
-// The default blueprint if no valid file is found
 const defaultNodes: Node[] = [
   {
     id: "1",
@@ -66,7 +65,6 @@ export default function App() {
           const loadedNodes = data.tables.map((t: any, index: number) => ({
             id: t.id,
             type: "table",
-            // CRITICAL FIX: Fallback coordinates if loading an old Phase 11 save file!
             position: t.position || { x: 100 + index * 300, y: 100 },
             data: { label: t.name, columns: t.columns || [] },
           }));
@@ -80,16 +78,55 @@ export default function App() {
           }));
           setEdges(loadedEdges);
         } else {
-          // FIX: If the file is completely empty, load the defaults
           setNodes(defaultNodes);
         }
       } catch (e) {
         console.error("Failed to load blueprint:", e);
-        setNodes(defaultNodes); // Load defaults on network/parse error
+        setNodes(defaultNodes);
       }
     }
     fetchBlueprint();
   }, [setNodes, setEdges]);
+
+  // --- NEW CRUD METHODS ---
+  const handleAddTable = useCallback(() => {
+    const tableName = window.prompt("New Table Name (e.g., Products, Orders):");
+    if (!tableName) return;
+
+    const newNode: Node = {
+      id: crypto.randomUUID(),
+      type: "table",
+      position: {
+        x: window.innerWidth / 2 - 100,
+        y: window.innerHeight / 2 - 100,
+      },
+      data: {
+        label: tableName,
+        columns: [
+          {
+            id: crypto.randomUUID(),
+            name: "id",
+            raw_type: "uuid",
+            is_primary: true,
+            is_nullable: false,
+          },
+        ],
+      },
+    };
+
+    setNodes((nds) => [...nds, newNode]);
+  }, [setNodes]);
+
+  const handleDeleteTable = useCallback(
+    (nodeId: string) => {
+      if (!window.confirm("Delete this entire table?")) return;
+      setNodes((nds) => nds.filter((node) => node.id !== nodeId));
+      setEdges((eds) =>
+        eds.filter((edge) => edge.source !== nodeId && edge.target !== nodeId),
+      );
+    },
+    [setNodes, setEdges],
+  );
 
   const handleAddColumn = useCallback(
     (nodeId: string) => {
@@ -127,9 +164,37 @@ export default function App() {
     [setNodes],
   );
 
+  const handleDeleteColumn = useCallback(
+    (nodeId: string, colId: string) => {
+      setNodes((nds) =>
+        nds.map((node) => {
+          if (node.id === nodeId) {
+            return {
+              ...node,
+              data: {
+                ...node.data,
+                columns: (node.data.columns as any[]).filter(
+                  (c) => c.id !== colId,
+                ),
+              },
+            };
+          }
+          return node;
+        }),
+      );
+    },
+    [setNodes],
+  );
+
+  // Inject all callbacks into node data
   const nodesWithCallbacks = nodes.map((node) => ({
     ...node,
-    data: { ...node.data, onAddColumn: handleAddColumn },
+    data: {
+      ...node.data,
+      onAddColumn: handleAddColumn,
+      onDeleteColumn: handleDeleteColumn,
+      onDeleteTable: handleDeleteTable,
+    },
   }));
 
   const onConnect = useCallback(
@@ -181,6 +246,18 @@ export default function App() {
       >
         <Controls />
         <Background color="#334155" gap={24} />
+
+        {/* Top Left: Add Table */}
+        <Panel position="top-left">
+          <button
+            onClick={handleAddTable}
+            className="bg-emerald-600 hover:bg-emerald-500 text-white px-4 py-2 rounded-md font-bold shadow-lg"
+          >
+            + New Table
+          </button>
+        </Panel>
+
+        {/* Top Right: Save Blueprint */}
         <Panel position="top-right">
           <button
             onClick={saveBlueprint}
