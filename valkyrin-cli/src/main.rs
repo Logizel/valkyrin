@@ -64,6 +64,11 @@ async fn execute_command(command: Commands) -> Result<()> {
     match command {
         Commands::Init => {
             println!("{} Initializing Valkyrin workspace...", "=>".green().bold());
+            valkyrin_core::config::initialize_workspace()?;
+            println!(
+                "{} Workspace ready! Run `valkyrin canvas` to begin.",
+                "=>".cyan().bold()
+            );
         }
         Commands::Canvas => {
             println!(

@@ -2,17 +2,20 @@
 use crate::ast::CodeMerger;
 use crate::canvas::CanvasPayload;
 use crate::codegen::{TargetLanguage, get_driver};
+use crate::config::load_config;
 use anyhow::{Context, Result};
 use std::fs;
 
 pub fn compile_blueprint() -> Result<()> {
+    // 1. Load the configuration file
+    let config = load_config()?;
+
     let file_contents = fs::read_to_string("schema.vdb.json")
         .context("Could not find schema.vdb.json. Have you saved the canvas yet?")?;
 
-    let payload: CanvasPayload = serde_json::from_str(&file_contents)
-        .context("Failed to parse schema.vdb.json. The file might be corrupted.")?;
+    let payload: CanvasPayload =
+        serde_json::from_str(&file_contents).context("Failed to parse schema.vdb.json")?;
 
-    // Pass 1: Parse IR Scaffolding
     let mut ir_graph = payload.to_ir();
 
     // Pass 2: The Relational Constraint Injector
@@ -51,8 +54,16 @@ pub fn compile_blueprint() -> Result<()> {
         }
     }
 
-    // Initialize Language Drivers
-    let driver = get_driver(TargetLanguage::Go);
+    // NEW: Map the yaml string to our TargetLanguage enum
+    let target_lang = match config.language.to_lowercase().as_str() {
+        "python" => TargetLanguage::Python,
+        "rust" => TargetLanguage::Rust,
+        "typescript" => TargetLanguage::TypeScript,
+        _ => TargetLanguage::Go, // Default to Go
+    };
+
+    // Initialize Language Drivers dynamically based on valkyrin.yaml
+    let driver = get_driver(target_lang);
     let merger = CodeMerger::new_go();
 
     let output_dir = "models";
@@ -61,11 +72,25 @@ pub fn compile_blueprint() -> Result<()> {
     // Pass 3: Run Generation & AST Merge Loop
     for entity in ir_graph.entities {
         let safe_name = entity.name.to_lowercase().replace(" ", "_");
-        let filename = format!("{}/{}.go", output_dir, safe_name);
+        
+        // Dynamically set file extension
+        let ext = match config.language.to_lowercase().as_str() {
+            "python" => "py",
+            "rust" => "rs",
+            "typescript" => "ts",
+            _ => "go",
+        };
+        let filename = format!("{}/{}.{}", output_dir, safe_name, ext);
 
         let imports = driver.generate_imports(&entity);
         let struct_def = driver.generate_model(&entity);
-        let combined_schema_code = format!("package models\n\n{}\n\n{}", imports, struct_def);
+        
+        // Format the output based on the language
+        let combined_schema_code = if ext == "go" {
+            format!("package models\n\n{}\n\n{}", imports, struct_def)
+        } else {
+            format!("{}\n\n{}", imports, struct_def)
+        };
 
         let custom_code = merger.extract_custom_zones(&filename);
 
