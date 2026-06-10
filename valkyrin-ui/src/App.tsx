@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useEffect } from "react";
 import {
   ReactFlow,
   Controls,
@@ -10,60 +10,47 @@ import {
 } from "@xyflow/react";
 import type { Connection, Edge, Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-
-// Import our new custom UI node
 import TableNode from "./components/TableNode";
-
-const initialEdges: Edge[] = [];
 
 export default function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
-  // Register custom node types
   const nodeTypes = useMemo(() => ({ table: TableNode }), []);
 
-  // Initialize the canvas with our custom nodes if it's empty
-  if (nodes.length === 0) {
-    setNodes([
-      {
-        id: "1",
-        type: "table",
-        position: { x: 100, y: 100 },
-        data: {
-          label: "Users",
-          columns: [
-            {
-              id: "col_1",
-              name: "id",
-              raw_type: "uuid",
-              is_primary: true,
-              is_nullable: false,
-            },
-          ],
-        },
-      },
-      {
-        id: "2",
-        type: "table",
-        position: { x: 500, y: 100 },
-        data: {
-          label: "Sessions",
-          columns: [
-            {
-              id: "col_2",
-              name: "session_token",
-              raw_type: "string",
-              is_primary: false,
-              is_nullable: false,
-            },
-          ],
-        },
-      },
-    ]);
-  }
+  // NEW: Fetch the saved blueprint from the Rust server on boot
+  useEffect(() => {
+    async function fetchBlueprint() {
+      try {
+        const response = await fetch("/api/load");
+        const data = await response.json();
 
-  // Handle adding a column (Using native browser prompts for rapid prototyping)
+        if (data.tables && data.tables.length > 0) {
+          // Restore the exact tables and their pixel coordinates
+          const loadedNodes = data.tables.map((t: any) => ({
+            id: t.id,
+            type: "table",
+            position: t.position, // Spatial tracking applied
+            data: { label: t.name, columns: t.columns },
+          }));
+          setNodes(loadedNodes);
+
+          // Restore the foreign key visual edges
+          const loadedEdges = data.relations.map((r: any) => ({
+            id: r.id,
+            source: r.source_table_id,
+            target: r.target_table_id,
+            type: "default",
+          }));
+          setEdges(loadedEdges);
+        }
+      } catch (e) {
+        console.error("No existing blueprint found on disk, starting fresh.");
+      }
+    }
+    fetchBlueprint();
+  }, [setNodes, setEdges]);
+
   const handleAddColumn = useCallback(
     (nodeId: string) => {
       const colName = window.prompt("Column Name (e.g., email, created_at):");
@@ -100,7 +87,6 @@ export default function App() {
     [setNodes],
   );
 
-  // Inject the callback into the nodes so the TableNode component can trigger it
   const nodesWithCallbacks = nodes.map((node) => ({
     ...node,
     data: { ...node.data, onAddColumn: handleAddColumn },
@@ -111,13 +97,13 @@ export default function App() {
     [setEdges],
   );
 
-  // The Bridge Function
   const saveBlueprint = async () => {
     const payload = {
       tables: nodes.map((n) => ({
         id: n.id,
         name: n.data.label,
-        columns: n.data.columns || [], // NOW WE SEND THE ACTUAL COLUMNS!
+        columns: n.data.columns || [],
+        position: n.position, // NEW: Save the exact X/Y layout
       })),
       relations: edges.map((e) => ({
         id: e.id,
@@ -155,7 +141,6 @@ export default function App() {
       >
         <Controls />
         <Background color="#334155" gap={24} />
-
         <Panel position="top-right">
           <button
             onClick={saveBlueprint}

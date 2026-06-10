@@ -12,6 +12,12 @@ pub struct CanvasTable {
     pub id: String, // The immutable UUID
     pub name: String,
     pub columns: Vec<CanvasColumn>,
+    pub position: NodePosition,
+}
+#[derive(Serialize, Deserialize, Debug)]
+pub struct NodePosition {
+    pub x: f32,
+    pub y: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -18,9 +18,27 @@ pub fn create_router() -> Router {
     Router::new()
         .route("/api/save", post(save_blueprint)) // NEW: The API bridge endpoint
         .route("/", get(serve_index))
+        .route("/api/load", get(load_blueprint))
         .route("/{*path}", get(serve_assets))
 }
-
+async fn load_blueprint() -> impl IntoResponse {
+    match fs::read_to_string("schema.vdb.json") {
+        Ok(content) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(content))
+            .unwrap(),
+        Err(_) => {
+            // If the file doesn't exist yet, return an empty canvas
+            let empty = r#"{"tables":[],"relations":[]}"#;
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(empty))
+                .unwrap()
+        }
+    }
+}
 /// Receives the JSON payload from React and writes it to the local disk.
 async fn save_blueprint(Json(payload): Json<serde_json::Value>) -> impl IntoResponse {
     // Format the JSON beautifully so it looks clean in the user's Git commits
