@@ -129,4 +129,101 @@ impl SyncEngine {
         // Spawn 300 pixels to the right of the furthest table
         (max_x + 300.0, base_y)
     }
+} // valkyrin-core/src/sync.rs
+// (Leave your existing trait, structs, and implementations intact at the top)
+
+use crate::canvas::{CanvasColumn, CanvasPayload, CanvasTable, NodePosition};
+use anyhow::{Context, Result as AnyhowResult};
+use std::fs;
+
+// Rust allows multiple impl blocks for the same struct, so we can cleanly append this:
+impl SyncEngine {
+    /// Connects to PostgreSQL, diffs the live catalog against the local canvas, and updates the JSON layout.
+    pub async fn synchronize_database(db_url: &str) -> AnyhowResult<()> {
+        // 1. Connect to the database
+        println!("🔌 Connecting to database...");
+        let pool = Pool::<Postgres>::connect(db_url)
+            .await
+            .context("Failed to connect to PostgreSQL. Is the URL correct?")?;
+
+        // 2. Fetch the live PostgreSQL catalog bypassing the ORM
+        println!("🔍 Introspecting live schema...");
+        let introspector = PostgresIntrospector;
+        let live_schema = introspector
+            .fetch_schema(&pool)
+            .await
+            .context("Failed to read PostgreSQL catalog. Check permissions.")?;
+
+        // 3. Load the local canvas layout
+        let local_file = fs::read_to_string("schema.vdb.json")
+            .unwrap_or_else(|_| r#"{"tables":[],"relations":[]}"#.to_string());
+        let mut payload: CanvasPayload =
+            serde_json::from_str(&local_file).context("Failed to parse local schema.vdb.json")?;
+
+        // 4. Diff the schemas
+        let local_ir = payload.to_ir();
+        let diff = Self::calculate_diff(&live_schema, &local_ir.entities);
+
+        if diff.new_tables.is_empty() {
+            println!("✅ Canvas is already perfectly synced with the live database.");
+            return Ok(());
+        }
+
+        // 5. Safely inject new tables into the visual layout
+        let existing_positions: Vec<(f32, f32)> = payload
+            .tables
+            .iter()
+            .map(|t| (t.position.x, t.position.y))
+            .collect();
+
+        let mut next_spawn = Self::calculate_safe_spawn_point(&existing_positions);
+
+        for new_table in diff.new_tables {
+            println!(
+                "✨ Discovered missing table in production: {}",
+                new_table.name
+            );
+
+            let mut canvas_columns = Vec::new();
+            for field in new_table.fields {
+                let type_str = match field.data_type {
+                    DataType::String { .. } => "string",
+                    DataType::Integer(_) => "int",
+                    DataType::Boolean => "boolean",
+                    DataType::DateTime => "datetime",
+                    DataType::Json => "json",
+                    DataType::Uuid => "uuid",
+                    _ => "string",
+                };
+
+                canvas_columns.push(CanvasColumn {
+                    id: field.id,
+                    name: field.name,
+                    raw_type: type_str.to_string(),
+                    is_primary: field.constraints.is_primary_key,
+                    is_nullable: field.constraints.is_nullable,
+                });
+            }
+
+            payload.tables.push(CanvasTable {
+                id: new_table.id,
+                name: new_table.name,
+                columns: canvas_columns,
+                position: NodePosition {
+                    x: next_spawn.0,
+                    y: next_spawn.1,
+                },
+            });
+
+            // Move the next spawn point down to prevent UI nodes from stacking on top of each other
+            next_spawn.1 += 250.0;
+        }
+
+        // 6. Write the updated blueprint back to disk
+        let pretty_json = serde_json::to_string_pretty(&payload)?;
+        fs::write("schema.vdb.json", pretty_json)?;
+        println!("💾 Canvas blueprint updated! Boot the canvas to see the new tables.");
+
+        Ok(())
+    }
 }
