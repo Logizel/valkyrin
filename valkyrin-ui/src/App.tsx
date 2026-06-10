@@ -12,13 +12,50 @@ import type { Connection, Edge, Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import TableNode from "./components/TableNode";
 
+// The default blueprint if no valid file is found
+const defaultNodes: Node[] = [
+  {
+    id: "1",
+    type: "table",
+    position: { x: 100, y: 100 },
+    data: {
+      label: "Users",
+      columns: [
+        {
+          id: "col_1",
+          name: "id",
+          raw_type: "uuid",
+          is_primary: true,
+          is_nullable: false,
+        },
+      ],
+    },
+  },
+  {
+    id: "2",
+    type: "table",
+    position: { x: 500, y: 100 },
+    data: {
+      label: "Sessions",
+      columns: [
+        {
+          id: "col_2",
+          name: "session_token",
+          raw_type: "string",
+          is_primary: false,
+          is_nullable: false,
+        },
+      ],
+    },
+  },
+];
+
 export default function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
   const nodeTypes = useMemo(() => ({ table: TableNode }), []);
 
-  // NEW: Fetch the saved blueprint from the Rust server on boot
   useEffect(() => {
     async function fetchBlueprint() {
       try {
@@ -26,26 +63,29 @@ export default function App() {
         const data = await response.json();
 
         if (data.tables && data.tables.length > 0) {
-          // Restore the exact tables and their pixel coordinates
-          const loadedNodes = data.tables.map((t: any) => ({
+          const loadedNodes = data.tables.map((t: any, index: number) => ({
             id: t.id,
             type: "table",
-            position: t.position, // Spatial tracking applied
-            data: { label: t.name, columns: t.columns },
+            // CRITICAL FIX: Fallback coordinates if loading an old Phase 11 save file!
+            position: t.position || { x: 100 + index * 300, y: 100 },
+            data: { label: t.name, columns: t.columns || [] },
           }));
           setNodes(loadedNodes);
 
-          // Restore the foreign key visual edges
-          const loadedEdges = data.relations.map((r: any) => ({
+          const loadedEdges = (data.relations || []).map((r: any) => ({
             id: r.id,
             source: r.source_table_id,
             target: r.target_table_id,
             type: "default",
           }));
           setEdges(loadedEdges);
+        } else {
+          // FIX: If the file is completely empty, load the defaults
+          setNodes(defaultNodes);
         }
       } catch (e) {
-        console.error("No existing blueprint found on disk, starting fresh.");
+        console.error("Failed to load blueprint:", e);
+        setNodes(defaultNodes); // Load defaults on network/parse error
       }
     }
     fetchBlueprint();
@@ -103,7 +143,7 @@ export default function App() {
         id: n.id,
         name: n.data.label,
         columns: n.data.columns || [],
-        position: n.position, // NEW: Save the exact X/Y layout
+        position: n.position,
       })),
       relations: edges.map((e) => ({
         id: e.id,
