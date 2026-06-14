@@ -23,6 +23,12 @@ enum Commands {
         /// Override auto-detection: 'postgres', 'mysql', or 'sqlite'
         #[arg(short, long)]
         db_type: Option<String>,
+        /// Confirm destructive changes (removing tables from canvas)
+        #[arg(short, long)]
+        confirm: bool,
+        /// Preview changes without modifying the canvas
+        #[arg(short = 'n', long)]
+        dry_run: bool,
     },
 }
 
@@ -92,17 +98,38 @@ async fn execute_command(command: Commands) -> Result<()> {
                 "=>".green().bold()
             );
         }
-        Commands::Sync { url, db_type } => {
+        Commands::Sync {
+            url,
+            db_type,
+            confirm,
+            dry_run,
+        } => {
+            let mode = if dry_run {
+                valkyrin_core::sync::SyncMode::DryRun
+            } else if confirm {
+                valkyrin_core::sync::SyncMode::ApplyAll
+            } else {
+                valkyrin_core::sync::SyncMode::ApplyNew
+            };
+
+            let mode_label = match mode {
+                valkyrin_core::sync::SyncMode::DryRun => "dry-run",
+                valkyrin_core::sync::SyncMode::ApplyAll => "apply-all",
+                valkyrin_core::sync::SyncMode::ApplyNew => "apply-new",
+            };
+
             println!(
-                "{} Synchronizing with live database catalog...",
-                "=>".cyan().bold()
+                "{} Synchronizing with live database catalog [{}]...",
+                "=>".cyan().bold(),
+                mode_label
             );
 
-            // Execute the Live DB Introspection Bridge!
             valkyrin_core::sync::SyncEngine::synchronize_database(
                 &url,
                 db_type.as_deref(),
-            ).await?;
+                mode,
+            )
+            .await?;
         }
     }
     Ok(())
