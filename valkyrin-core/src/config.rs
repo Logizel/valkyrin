@@ -1,21 +1,21 @@
 // valkyrin-core/src/config.rs
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
 #[derive(Serialize, Deserialize)]
 pub struct ValkyrinConfig {
-    pub project_name: String,
     pub language: String,
+    pub orm: Option<String>,
     pub database_url_env: String,
 }
 
 impl Default for ValkyrinConfig {
     fn default() -> Self {
         Self {
-            project_name: "my_backend_service".to_string(),
-            language: "go".to_string(), // Can be changed to "python" or "rust"
+            language: "go".to_string(),
+            orm: Some("gorm".to_string()),
             database_url_env: "DATABASE_URL".to_string(),
         }
     }
@@ -46,7 +46,7 @@ pub fn initialize_workspace() -> Result<()> {
 
 pub fn load_config() -> Result<ValkyrinConfig> {
     let contents = fs::read_to_string("valkyrin.yaml")
-        .unwrap_or_else(|_| "language: go\nproject_name: default".to_string());
+        .context("valkyrin.yaml not found. Run 'valkyrin init' to create it.")?;
 
     let config: ValkyrinConfig = serde_yaml::from_str(&contents)?;
     Ok(config)

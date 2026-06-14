@@ -1,21 +1,22 @@
 // valkyrin-core/src/codegen.rs
 use crate::ir::{DataType, Entity};
+use anyhow::Result;
 
 /// The universal contract for code generation.
 pub trait LanguageDriver {
     /// Translates a universal Valkyrin type into the language-specific type.
     fn map_data_type(&self, data_type: &DataType, is_nullable: bool) -> String;
 
-    /// Generates the necessary file imports (e.g., `import "time"` for Go).
-    fn generate_imports(&self, entity: &Entity) -> String;
-
-    /// Compiles a single entity into a full struct/class definition.
+    /// Compiles a single entity into a complete file with imports and struct/class definition.
     fn generate_model(&self, entity: &Entity) -> String;
+
+    /// Returns the file extension for this language (e.g., "go", "py", "rs").
+    fn file_extension(&self) -> &'static str;
 }
 
-pub struct GoDriver;
+pub struct GoGormDriver;
 
-impl LanguageDriver for GoDriver {
+impl LanguageDriver for GoGormDriver {
     fn map_data_type(&self, data_type: &DataType, is_nullable: bool) -> String {
         let base_type = match data_type {
             DataType::String { .. } | DataType::Text => "string",
@@ -35,7 +36,17 @@ impl LanguageDriver for GoDriver {
         }
     }
 
-    fn generate_imports(&self, entity: &Entity) -> String {
+    fn file_extension(&self) -> &'static str {
+        "go"
+    }
+
+    fn generate_model(&self, entity: &Entity) -> String {
+        let mut output = String::new();
+
+        // Generate package declaration (Go-specific)
+        output.push_str("package models\n\n");
+
+        // Generate imports
         let mut imports = vec!["\"time\""];
 
         let has_json = entity
@@ -54,11 +65,10 @@ impl LanguageDriver for GoDriver {
             imports.push("\"github.com/google/uuid\"");
         }
 
-        format!("import (\n\t{}\n)", imports.join("\n\t"))
-    }
+        output.push_str(&format!("import (\n\t{}\n)\n\n", imports.join("\n\t")));
 
-    fn generate_model(&self, entity: &Entity) -> String {
-        let mut model = format!("type {} struct {{\n", entity.name);
+        // Generate struct definition
+        output.push_str(&format!("type {} struct {{\n", entity.name));
 
         for field in &entity.fields {
             let go_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
@@ -74,7 +84,7 @@ impl LanguageDriver for GoDriver {
 
             // Go struct fields must be capitalized to be public/exported
             let exported_name = capitalize_first(&field.name);
-            model.push_str(&format!(
+            output.push_str(&format!(
                 "\t{} {} `gorm:\"{}\" json:\"{}\"`\n",
                 exported_name,
                 go_type,
@@ -83,8 +93,8 @@ impl LanguageDriver for GoDriver {
             ));
         }
 
-        model.push_str("}\n");
-        model
+        output.push_str("}\n");
+        output
     }
 }
 
@@ -96,9 +106,9 @@ fn capitalize_first(s: &str) -> String {
     }
 }
 
-pub struct PythonDriver;
+pub struct PythonSqlModelDriver;
 
-impl LanguageDriver for PythonDriver {
+impl LanguageDriver for PythonSqlModelDriver {
     fn map_data_type(&self, data_type: &DataType, is_nullable: bool) -> String {
         let base_type = match data_type {
             DataType::String { .. } | DataType::Text => "str",
@@ -117,12 +127,18 @@ impl LanguageDriver for PythonDriver {
         }
     }
 
-    fn generate_imports(&self, _entity: &Entity) -> String {
-        "from typing import Optional\nfrom datetime import datetime\nfrom sqlmodel import SQLModel, Field".to_string()
+    fn file_extension(&self) -> &'static str {
+        "py"
     }
 
     fn generate_model(&self, entity: &Entity) -> String {
-        let mut model = format!("class {}(SQLModel, table=True):\n", entity.name);
+        let mut output = String::new();
+
+        // Generate imports
+        output.push_str("from typing import Optional\nfrom datetime import datetime\nfrom sqlmodel import SQLModel, Field\n\n");
+
+        // Generate class definition
+        output.push_str(&format!("class {}(SQLModel, table=True):\n", entity.name));
 
         for field in &entity.fields {
             let py_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
@@ -134,32 +150,45 @@ impl LanguageDriver for PythonDriver {
             };
 
             if primary_key_flag.is_empty() {
-                model.push_str(&format!("    {}: {}\n", field.name, py_type));
+                output.push_str(&format!("    {}: {}\n", field.name, py_type));
             } else {
-                model.push_str(&format!(
+                output.push_str(&format!(
                     "    {}: {} = Field(default=None, {})\n",
                     field.name, py_type, primary_key_flag
                 ));
             }
         }
 
-        model
+        output
     }
 }
 
-pub enum TargetLanguage {
-    Go,
-    Python,
-    Rust,
-    TypeScript,
+#[derive(Copy, Clone)]
+pub enum TargetBackend {
+    GoGorm,
+    GoEnt,
+    PythonSqlAlchemy,
+    PythonSqlModel,
+    RustDiesel,
+    RustSeaOrm,
+    JavaScriptSequelize,
+    JavaScriptTypeOrm,
+    TypeScriptPrisma,
+    TypeScriptTypeOrm,
 }
 
-pub fn get_driver(language: TargetLanguage) -> Box<dyn LanguageDriver> {
-    match language {
-        TargetLanguage::Go => Box::new(GoDriver),
-        TargetLanguage::Python => Box::new(PythonDriver),
-        // Future driver stubs return unimplemented!() for now
-        TargetLanguage::Rust => unimplemented!("Rust driver pending"),
-        TargetLanguage::TypeScript => unimplemented!("TS driver pending"),
+pub fn get_driver(backend: TargetBackend) -> Result<Box<dyn LanguageDriver>> {
+    match backend {
+        TargetBackend::GoGorm => Ok(Box::new(GoGormDriver)),
+        TargetBackend::PythonSqlModel => Ok(Box::new(PythonSqlModelDriver)),
+        // Remaining drivers return errors with descriptive messages
+        TargetBackend::GoEnt => Err(anyhow::anyhow!("GoEnt driver not yet implemented")),
+        TargetBackend::PythonSqlAlchemy => Err(anyhow::anyhow!("PythonSqlAlchemy driver not yet implemented")),
+        TargetBackend::RustDiesel => Err(anyhow::anyhow!("RustDiesel driver not yet implemented")),
+        TargetBackend::RustSeaOrm => Err(anyhow::anyhow!("RustSeaORM driver not yet implemented")),
+        TargetBackend::JavaScriptSequelize => Err(anyhow::anyhow!("JavaScriptSequelize driver not yet implemented")),
+        TargetBackend::JavaScriptTypeOrm => Err(anyhow::anyhow!("JavaScriptTypeOrm driver not yet implemented")),
+        TargetBackend::TypeScriptPrisma => Err(anyhow::anyhow!("TypeScriptPrisma driver not yet implemented")),
+        TargetBackend::TypeScriptTypeOrm => Err(anyhow::anyhow!("TypeScriptTypeOrm driver not yet implemented")),
     }
 }
