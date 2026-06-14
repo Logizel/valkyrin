@@ -17,9 +17,12 @@ enum Commands {
     Canvas,
     Generate,
     Sync {
-        /// The PostgreSQL connection string
+        /// Database connection string (auto-detects type from URL prefix)
         #[arg(short, long)]
         url: String,
+        /// Override auto-detection: 'postgres', 'mysql', or 'sqlite'
+        #[arg(short, long)]
+        db_type: Option<String>,
     },
 }
 
@@ -89,14 +92,17 @@ async fn execute_command(command: Commands) -> Result<()> {
                 "=>".green().bold()
             );
         }
-        Commands::Sync { url } => {
+        Commands::Sync { url, db_type } => {
             println!(
                 "{} Synchronizing with live database catalog...",
                 "=>".cyan().bold()
             );
 
             // Execute the Live DB Introspection Bridge!
-            valkyrin_core::sync::SyncEngine::synchronize_database(&url).await?;
+            valkyrin_core::sync::SyncEngine::synchronize_database(
+                &url,
+                db_type.as_deref(),
+            ).await?;
         }
     }
     Ok(())

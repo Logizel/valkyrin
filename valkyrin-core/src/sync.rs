@@ -454,11 +454,28 @@ impl SyncEngine {
 
     /// Connects to a database (auto-detects type from URL), diffs the live schema against
     /// the local canvas, and updates the JSON layout.
-    pub async fn synchronize_database(db_url: &str) -> AnyhowResult<()> {
+    pub async fn synchronize_database(
+        db_url: &str,
+        explicit_db_type: Option<&str>,
+    ) -> AnyhowResult<()> {
         println!("🔌 Connecting to database...");
 
-        // Auto-detect database type from URL
-        let db_type = DatabaseType::from_url(db_url)?;
+        // Use explicit db_type if provided, otherwise auto-detect from URL
+        let db_type = if let Some(db_type_str) = explicit_db_type {
+            match db_type_str.to_lowercase().as_str() {
+                "postgres" | "postgresql" => DatabaseType::PostgreSQL,
+                "mysql" => DatabaseType::MySQL,
+                "sqlite" => DatabaseType::SQLite,
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.",
+                        db_type_str
+                    ))
+                }
+            }
+        } else {
+            DatabaseType::from_url(db_url)?
+        };
 
         let live_schema = match db_type {
             DatabaseType::PostgreSQL => {
