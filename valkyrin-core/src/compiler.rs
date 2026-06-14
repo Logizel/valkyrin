@@ -48,16 +48,18 @@ pub fn compile_blueprint() -> Result<()> {
 
              // Prevent duplicate injections if the developer already added the FK manually on the canvas
              if !target_table.fields.iter().any(|f| f.name == fk_name) {
-                 target_table.fields.push(crate::ir::Field {
-                     id: format!("fk_{}", conn.source_entity_id),
-                     name: fk_name,
-                     data_type: source_pk_data_type, // Match the referenced PK's type
-                     constraints: crate::ir::Constraints {
-                         is_primary_key: false,
-                         is_unique: false,
-                         is_nullable: true,
-                     },
-                 });
+                  target_table.fields.push(crate::ir::Field {
+                      id: format!("fk_{}", conn.source_entity_id),
+                      name: fk_name,
+                      data_type: source_pk_data_type, // Match the referenced PK's type
+                      constraints: crate::ir::Constraints {
+                          is_primary_key: false,
+                          is_unique: false,
+                          is_nullable: true,
+                          is_indexed: false,
+                          default_value: None,
+                      },
+                  });
              }
          }
      }

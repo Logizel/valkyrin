@@ -123,3 +123,30 @@ When modifying this codebase, strictly adhere to the established architectural b
     DO NOT put network/server logic in the Core crate.
 
     Treat schema.vdb.json as the absolute source of truth; any UI modifications must successfully serialize back into this schema, and any Core modifications must read from it natively.
+
+## Key Architectural Differentiators
+
+### 1. The AST Code Merger (Non-Destructive Generation)
+
+- **The Problem:** Traditional code generators are notoriously destructive. If you add a custom helper function (like `func (u *User) GetFullName()`) to an automatically generated `user.go` file, running the generator again will wipe out your custom code.
+- **The Valkyrin Solution:** Valkyrin uses an Abstract Syntax Tree (AST) parser before it writes to your disk. It scans your existing files for `// valkyrin:custom_methods_start` boundaries, extracts your custom business logic, generates the new database struct, and seamlessly stitches your custom logic back into the file. You get visual schema management without sacrificing code ownership.
+
+### 2. True Local-First & Zero-Friction Architecture
+
+- **The Problem:** Most visual database designers are SaaS products. They require accounts, cloud syncing, and internet connections, and your database architecture is trapped on their servers.
+- **The Valkyrin Solution:** Valkyrin is a single, cross-compiled Rust binary with the entire React frontend embedded directly inside it via `rust-embed`. You run `valkyrin canvas` and the UI is served locally at `localhost:3000`. The absolute source of truth is a `schema.vdb.json` file that lives inside your Git repository. If GitHub goes down, Valkyrin still works.
+
+### 3. Live Introspection with Spatial Memory (Two-Way Sync)
+
+- **The Problem:** If a DBA manually alters a table in production via pgAdmin or psql, your visual diagram immediately becomes outdated. When you import a database into other visualizers, it usually drops all the tables in a messy, overlapping pile.
+- **The Valkyrin Solution:** The `valkyrin sync --url <DB>` command tunnels into a live PostgreSQL database, mathematically diffs the live `information_schema` against your local canvas, and injects only the missing tables. Furthermore, it utilizes **Spatial Memory**. It remembers the exact X/Y pixel coordinates of where you dragged your tables, calculating "safe spawn points" for new tables so they never overlap your beautifully organized layout.
+
+### 4. Direct-to-Native Code Orchestration
+
+- **The Problem:** Visual tools usually export raw `.sql` files. You still have to spend hours writing the Go, Python, or Rust structs and carefully adding the correct ORM tags (like `gorm:"primaryKey"`) to map your application to the database.
+- **The Valkyrin Solution:** Through its dynamic `LanguageDriver` trait and `valkyrin.yaml` configuration, Valkyrin translates your visual graph into strict Intermediate Representation (IR), and then physically generates the exact native language files your backend needs. A visual change to a table on the canvas instantly becomes a perfectly formatted Go struct or Python SQLAlchemy model.
+
+### 5. The Relational Edge Engine (Visual Constraint Injection)
+
+- **The Problem:** In many tools, drawing a line between tables is purely cosmetic. It doesn't actually affect the generated code, leaving the developer to figure out the Foreign Keys manually.
+- **The Valkyrin Solution:** Valkyrin features an interactive Relational Edge. When you connect two tables in the UI, you can click a badge on the connecting line to toggle between `1:N`, `1:1`, and `M:N`. When you hit Generate, the Compiler Engine's "Pass 2 Constraint Injector" intercepts this graph and mathematically injects the correct Foreign Key fields (e.g., `user_id *string`) directly into the target structs.

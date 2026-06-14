@@ -53,10 +53,16 @@ impl DatabaseIntrospector for PostgresIntrospector {
             // Map PostgreSQL physical types back to Valkyrin universal IR types
             let mapped_type = match db_type.as_str() {
                 "character varying" | "text" => DataType::String { max_length: None },
-                "integer" | "bigint" => DataType::Integer(crate::ir::IntSize::Standard),
+                "integer" | "bigint" | "smallint" => DataType::Integer(crate::ir::IntSize::Standard),
                 "boolean" => DataType::Boolean,
-                "timestamp without time zone" => DataType::DateTime,
-                "jsonb" => DataType::Json,
+                "timestamp without time zone" | "timestamp with time zone" => DataType::DateTime,
+                "jsonb" | "json" => DataType::Json,
+                "numeric" | "decimal" => DataType::Decimal {
+                    precision: 10,
+                    scale: 2,
+                },
+                "real" | "double precision" => DataType::Float,
+                "uuid" => DataType::Uuid,
                 _ => DataType::Text, // Safe fallback
             };
 
@@ -68,6 +74,8 @@ impl DatabaseIntrospector for PostgresIntrospector {
                     is_primary_key: false, // In a full production build, this requires joining the pg_constraint table
                     is_unique: false,
                     is_nullable: is_nullable_str == "YES",
+                    is_indexed: false,
+                    default_value: None,
                 },
             });
         }
@@ -202,6 +210,9 @@ impl SyncEngine {
                     raw_type: type_str.to_string(),
                     is_primary: field.constraints.is_primary_key,
                     is_nullable: field.constraints.is_nullable,
+                    is_unique: field.constraints.is_unique,
+                    is_indexed: field.constraints.is_indexed,
+                    default_value: field.constraints.default_value,
                 });
             }
 

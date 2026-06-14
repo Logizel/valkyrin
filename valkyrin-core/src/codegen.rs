@@ -20,12 +20,16 @@ impl LanguageDriver for GoGormDriver {
     fn map_data_type(&self, data_type: &DataType, is_nullable: bool) -> String {
         let base_type = match data_type {
             DataType::String { .. } | DataType::Text => "string",
-            DataType::Integer(_) => "int",
+            DataType::Integer(crate::ir::IntSize::Small) => "int16",
+            DataType::Integer(crate::ir::IntSize::Standard) => "int",
+            DataType::Integer(crate::ir::IntSize::Big) => "int64",
             DataType::Float => "float64",
+            DataType::Decimal { .. } => "float64", // Go doesn't have native decimal; use float64 or use a lib
             DataType::Boolean => "bool",
             DataType::DateTime => "time.Time",
             DataType::Json => "datatypes.JSON",
             DataType::Uuid => "uuid.UUID",
+            DataType::Enum(_) => "string", // Go enums are typically strings or consts
         };
 
         // If a column is nullable, Go requires a memory pointer to handle the nil state
@@ -112,12 +116,16 @@ impl LanguageDriver for PythonSqlModelDriver {
     fn map_data_type(&self, data_type: &DataType, is_nullable: bool) -> String {
         let base_type = match data_type {
             DataType::String { .. } | DataType::Text => "str",
-            DataType::Integer(_) => "int",
+            DataType::Integer(crate::ir::IntSize::Small) => "int",
+            DataType::Integer(crate::ir::IntSize::Standard) => "int",
+            DataType::Integer(crate::ir::IntSize::Big) => "int",
             DataType::Float => "float",
+            DataType::Decimal { .. } => "Decimal",
             DataType::Boolean => "bool",
             DataType::DateTime => "datetime",
             DataType::Json => "dict",
             DataType::Uuid => "UUID",
+            DataType::Enum(_) => "str", // Python enums are typically Enum class, but store as str
         };
 
         if is_nullable {

@@ -7,10 +7,12 @@ pub enum DataType {
     Text,
     Integer(IntSize),
     Float,
+    Decimal { precision: u8, scale: u8 },
     Boolean,
     DateTime,
     Json,
     Uuid,
+    Enum(Vec<String>),
 }
 
 /// Defines the memory size footprint of an integer.
@@ -54,6 +56,8 @@ pub struct Constraints {
     pub is_primary_key: bool,
     pub is_unique: bool,
     pub is_nullable: bool,
+    pub is_indexed: bool,
+    pub default_value: Option<String>,
 }
 
 #[derive(Debug, Clone)]

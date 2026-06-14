@@ -24,9 +24,12 @@ pub struct NodePosition {
 pub struct CanvasColumn {
     pub id: String,
     pub name: String,
-    pub raw_type: String, // e.g., "string", "int", "boolean" from the UI dropdown
+    pub raw_type: String, // e.g., "string", "int", "float", "text", "decimal", "bigint", "smallint"
     pub is_primary: bool,
     pub is_nullable: bool,
+    pub is_unique: bool,
+    pub is_indexed: bool,
+    pub default_value: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -53,12 +56,23 @@ impl CanvasPayload {
             for col in &table.columns {
                 let data_type = match col.raw_type.as_str() {
                     "string" => DataType::String { max_length: None },
+                    "text" => DataType::Text,
                     "int" | "integer" => DataType::Integer(IntSize::Standard),
+                    "bigint" => DataType::Integer(IntSize::Big),
+                    "smallint" | "int16" => DataType::Integer(IntSize::Small),
+                    "float" => DataType::Float,
+                    "decimal" => {
+                        // Default to (10, 2) if not specified; ideally parsed from raw_type
+                        DataType::Decimal {
+                            precision: 10,
+                            scale: 2,
+                        }
+                    }
                     "boolean" | "bool" => DataType::Boolean,
-                    "datetime" => DataType::DateTime,
-                    "json" => DataType::Json,
+                    "datetime" | "timestamp" => DataType::DateTime,
+                    "json" | "jsonb" => DataType::Json,
                     "uuid" => DataType::Uuid,
-                    _ => DataType::Text,
+                    _ => DataType::Text, // Safe fallback
                 };
 
                 fields.push(Field {
@@ -68,7 +82,9 @@ impl CanvasPayload {
                     constraints: Constraints {
                         is_primary_key: col.is_primary,
                         is_nullable: col.is_nullable,
-                        is_unique: false,
+                        is_unique: col.is_unique,
+                        is_indexed: col.is_indexed,
+                        default_value: col.default_value.clone(),
                     },
                 });
             }
