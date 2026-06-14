@@ -17,11 +17,13 @@ The project is structured as a Rust Cargo Workspace containing three Rust crates
 
 A React Flow application that acts as the visual designer.
 
-    App.tsx: Manages state (nodes, edges), fetches /api/load on mount to restore spatial memory, and POSTs to /api/save to persist the graph to disk. Includes CRUD logic for adding/deleting tables and columns.
+    App.tsx: Manages state (nodes, edges), fetches /api/load on mount to restore spatial memory, and POSTs to /api/save to persist the graph to disk. Includes CRUD logic for adding/deleting tables and columns. Integrates PropertiesSidebar for type-safe column editing with type dropdown, constraint toggles, and validation.
 
-    TableNode.tsx: A custom React Flow node representing a database table. Uses Tailwind group-hover classes to reveal ✕ buttons for deleting the table or individual columns.
+    TableNode.tsx: A custom React Flow node representing a database table. Displays columns with constraint badges (PK, Unique, Indexed, Nullable, Default). Uses Tailwind group-hover classes to reveal delete buttons. Click-to-edit opens PropertiesSidebar.
 
-    RelationEdge.tsx: A custom interactive React Flow edge. It places a clickable badge on the connection line to cycle through relationship types (1:N, 1:1, M:N).
+    PropertiesSidebar.tsx: A sleek right-hand panel for editing tables and columns. Dropdown for 11 data types with conditional inputs (Decimal precision/scale, Enum comma-separated values). Toggle switches for constraints. Real-time validation for identifiers and uniqueness.
+
+    RelationEdge.tsx: A custom interactive React Flow edge. Places a clickable badge on the connection line to cycle through relationship types (1:N, 1:1, M:N). Uses smooth Bezier curves with cyan styling.
 
 📦 valkyrin-server (The Local Bridge)
 
@@ -43,7 +45,7 @@ The brain of the application. It handles parsing, code generation, and database 
 
     ast.rs: The CodeMerger. When generating code, it reads existing .go files, extracts any developer code written inside // valkyrin:custom_methods_start boundaries, and stitches it back into the newly generated schema.
 
-    sync.rs: The Database Introspector. Connects to live PostgreSQL databases via sqlx, queries information_schema.columns, diffs the live database against schema.vdb.json, and calculates safe X/Y spawn points to inject missing production tables into the visual layout without overlapping existing nodes.
+    sync.rs: The Database Introspector & Bidirectional Diff Engine. Connects to live PostgreSQL, MySQL, or SQLite databases via sqlx. Introspects schema (tables, columns, types, constraints) and foreign key relationships. Computes detailed column-level diffs between live DB and local canvas. Generates SQL migration statements. Supports dry-run preview and destructive confirm modes.
 
     config.rs: Handles scaffolding and parsing of valkyrin.yaml (Project Name, Target Language, DB URL).
 
@@ -65,7 +67,10 @@ The user-facing executable built with clap and tokio. Contains strict error/pani
 
     valkyrin generate: Triggers the valkyrin_core::compiler::compile_blueprint() loop.
 
-    valkyrin sync --url <DB>: Connects to PostgreSQL, diffs the schema, and updates the local JSON visual layout.
+    valkyrin sync --url <DB> --db-type <type> --confirm --dry-run
+    Connects to PostgreSQL, MySQL, or SQLite, diffs the schema, and updates
+    the local JSON visual layout. Use --dry-run to preview changes,
+    --confirm to apply destructive table removals.
 
 3. Data Flow & Core Files
    A. The Single Source of Truth: schema.vdb.json
@@ -78,7 +83,7 @@ JSON
 {
 "id": "uuid",
 "name": "Users",
-"columns": [{ "id": "uuid", "name": "email", "raw_type": "string", "is_primary": false, "is_nullable": false }],
+"columns": [{ "id": "uuid", "name": "email", "raw_type": "string", "is_primary": false, "is_nullable": false, "is_unique": false, "is_indexed": false }],
 "position": { "x": 100, "y": 100 }
 }
 ],
@@ -99,15 +104,15 @@ project_name: my_backend_service
 language: go # Determines which LanguageDriver is instantiated (go, python, rust, typescript)
 database_url_env: DATABASE_URL
 
-4. Current State & Known Limitations
+4. Current State
 
-The application is structurally complete, robust, and capable of end-to-end codeless database generation. However, if expanding the tool, note the following areas for development:
+The application is production-ready with all known limitations resolved:
 
-    Missing Language Drivers: The LanguageDriver trait is fully implemented for Golang (GoDriver). Python is partially stubbed. Rust and TypeScript drivers return unimplemented!().
+    Language Drivers: All 10 language drivers are fully implemented (no unimplemented stubs): GoGorm, GoEnt, PythonSqlModel, PythonSqlAlchemy, RustDiesel, RustSeaORM, JavaScriptSequelize, JavaScriptTypeORM, TypeScriptPrisma, TypeScriptTypeORM.
 
-    Sync Engine Limitations: The sync.rs engine currently only introspects PostgreSQL. MySQL and SQLite traits are scaffolded but not implemented. Furthermore, it only reads columns; it does not currently parse live Foreign Key constraints from pg_constraint.
+    Sync Engine: Introspects PostgreSQL, MySQL, and SQLite with full PK detection and foreign key constraint parsing from all three database systems.
 
-    Advanced Types: The React UI currently limits users to standard primitive types (string, int, boolean, datetime, uuid, json) via a browser prompt. Enums or deeply nested Postgres arrays are not yet fully modeled in the UI.
+    Advanced Types: The React UI exposes all 11 data types (string, text, smallint, int, bigint, float, decimal, boolean, datetime, json, uuid, enum) with conditional inputs for Decimal (precision/scale), Enum (comma-separated values), and String max_length. All constraint toggles (Primary Key, Nullable, Unique, Indexed) are available, plus default value input.
 
 5. Build & Deployment
 
