@@ -1,0 +1,71 @@
+# AGENTS.md
+
+Valkyrin is a Rust CLI tool for designing database schemas visually and generating ORM code. This file captures context that agents are likely to miss without help.
+
+## Project Structure
+
+**Workspace** (Cargo.toml): `valkyrin-cli`, `valkyrin-core`, `valkyrin-server`
+
+- **valkyrin-cli** (`src/main.rs`): Binary entrypoint. Defines four commands: `init`, `canvas`, `generate`, `sync`.
+- **valkyrin-core**: Compilation logic, code generators (Python, Go, Rust, JavaScript, TypeScript), database introspection, sync engine, config parsing.
+- **valkyrin-server**: Lightweight Axum web server (port 3000). Serves the embedded React UI.
+- **valkyrin-ui**: React + TypeScript + Vite SPA. Drag-and-drop schema canvas. Uses Bun package manager. Built to static files and embedded into the server binary via `rust-embed`.
+
+## Build Order & Commands
+
+**UI must build before Rust**, because `valkyrin-server` embeds the compiled UI:
+
+```bash
+# Full build (release):
+cd valkyrin-ui && bun install && bun run build
+cd .. && cargo build --release
+
+# Dev (Rust only; UI dev runs separately):
+cargo build
+
+# UI development server:
+cd valkyrin-ui && bun install && bun run dev
+```
+
+## Rust Edition & Quirks
+
+- **Edition: `2024`** — Valid in Rust 1.92+. Do not "fix" to 2021.
+- **No test suites** in main codebase (valkyrin-ui has eslint but no vitest).
+- **No dev-dependencies** defined in Cargo.toml files.
+- **Binary name**: `valkyrin-cli` (not `valkyrin`).
+
+## Release Build
+
+CI uses multi-platform cross-compilation. Release profile prioritizes binary size (`opt-level = "z"`, `lto = "fat"`, `strip = true`, `panic = "abort"`). See `.github/workflows/release.yml` for the full build sequence.
+
+## CLI Commands
+
+```bash
+valkyrin init                           # Create .valkyrin.toml config
+valkyrin canvas                         # Start web server at localhost:3000
+valkyrin generate                       # Compile blueprint → ORM code
+valkyrin sync --url <postgres-conn>     # Introspect live DB and update canvas
+```
+
+## Key Dependencies
+
+- **Tokio** (full features) for async runtime.
+- **sqlx** (postgres, runtime-tokio-rustls) for database introspection.
+- **tree-sitter** (Python, Go) for code parsing during sync.
+- **rust-embed** for embedding UI assets.
+- **Axum** for web server.
+- **Clap** (derive) for CLI argument parsing.
+
+## Important Files
+
+- `.github/workflows/release.yml` — Release build procedure; shows UI build step.
+- `valkyrin-ui/package.json` — Defines `bun run build` (and `dev`, `lint`, `preview`).
+- `schema.vdb.json` — Example or template for blueprint format.
+
+## Potential Agent Pitfalls
+
+1. **Forgetting to build UI first** — Rust will compile but server won't serve anything.
+2. **Assuming tests exist** — There are none to run.
+3. **Edition mismatch** — Do not downgrade `edition = "2024"`.
+4. **Rust version** — Requires 1.92+.
+5. **Bun vs npm** — UI uses Bun, not npm or pnpm.
