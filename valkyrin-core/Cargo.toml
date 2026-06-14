@@ -9,7 +9,7 @@ async-trait = "0.1.89"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 serde_yaml = "0.9.34"
-sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "postgres", "mysql", "sqlite"] }
 tokio = { version = "1.52.3", features = ["full"] }
 tree-sitter = "0.26.9"
 tree-sitter-go = "0.25.0"
