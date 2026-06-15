@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::Row;
 use std::fs;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Supported database types for introspection
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -873,6 +874,45 @@ impl SyncEngine {
         statements
     }
 
+    /// Writes migration statements to a timestamped SQL file in the migrations/ directory.
+    pub fn write_migration_file(
+        statements: &[String],
+        db_type: DatabaseType,
+    ) -> AnyhowResult<Option<String>> {
+        if statements.is_empty() {
+            return Ok(None);
+        }
+
+        let migration_dir = "migrations";
+        fs::create_dir_all(migration_dir)?;
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let db_suffix = match db_type {
+            DatabaseType::PostgreSQL => "postgres",
+            DatabaseType::MySQL => "mysql",
+            DatabaseType::SQLite => "sqlite",
+        };
+
+        let filename = format!("{}/{}_migration_{}.sql", migration_dir, db_suffix, timestamp);
+        let mut content = String::new();
+        content.push_str("-- Valkyrin Auto-generated Migration\n");
+        content.push_str(&format!("-- Database: {}\n", db_suffix));
+        content.push_str(&format!("-- Timestamp: {}\n\n", timestamp));
+
+        for stmt in statements {
+            content.push_str(stmt);
+            content.push_str("\n\n");
+        }
+
+        fs::write(&filename, content)?;
+        println!("📝 Migration written to: {}", filename);
+        Ok(Some(filename))
+    }
+
     /// Converts a Valkyrin DataType to an SQL type string for the given database.
     fn ir_type_to_sql(dt: &DataType, db_type: DatabaseType) -> String {
         match dt {
@@ -1043,10 +1083,14 @@ impl SyncEngine {
 
         // Generate and show migration SQL
         let migration_stmts = Self::generate_migration(&local_ir.entities, &diff, db_type);
-        if !migration_stmts.is_empty() && diff.new_tables.is_empty() {
+        if !migration_stmts.is_empty() {
             println!("\n   📝 Suggested Migration SQL:");
             for stmt in &migration_stmts {
                 println!("      {}", stmt);
+            }
+            // Write migration file (except in dry-run mode)
+            if mode != SyncMode::DryRun {
+                Self::write_migration_file(&migration_stmts, db_type)?;
             }
         }
 

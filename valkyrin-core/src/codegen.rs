@@ -1,5 +1,5 @@
 // valkyrin-core/src/codegen.rs
-use crate::ir::{DataType, Entity};
+use crate::ir::{DataType, Entity, Field};
 use anyhow::Result;
 
 /// The universal contract for code generation.
@@ -24,15 +24,14 @@ impl LanguageDriver for GoGormDriver {
             DataType::Integer(crate::ir::IntSize::Standard) => "int",
             DataType::Integer(crate::ir::IntSize::Big) => "int64",
             DataType::Float => "float64",
-            DataType::Decimal { .. } => "float64", // Go doesn't have native decimal; use float64 or use a lib
+            DataType::Decimal { .. } => "decimal.Decimal", // Use shopspring/decimal
             DataType::Boolean => "bool",
             DataType::DateTime => "time.Time",
             DataType::Json => "datatypes.JSON",
             DataType::Uuid => "uuid.UUID",
-            DataType::Enum(_) => "string", // Go enums are typically strings or consts
+            DataType::Enum(_) => "string", // Go enums stored as strings, constants generated separately
         };
 
-        // If a column is nullable, Go requires a memory pointer to handle the nil state
         if is_nullable {
             format!("*{}", base_type)
         } else {
@@ -47,11 +46,9 @@ impl LanguageDriver for GoGormDriver {
     fn generate_model(&self, entity: &Entity) -> String {
         let mut output = String::new();
 
-        // Generate package declaration (Go-specific)
         output.push_str("package models\n\n");
 
-        // Generate imports
-        let mut imports = vec!["\"time\""];
+        let mut imports = vec!["\"time\"", "\"github.com/shopspring/decimal\""];
 
         let has_json = entity
             .fields
@@ -71,13 +68,33 @@ impl LanguageDriver for GoGormDriver {
 
         output.push_str(&format!("import (\n\t{}\n)\n\n", imports.join("\n\t")));
 
-        // Generate struct definition
+        // Generate enum constants for each enum field
+        let enum_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .collect();
+
+        if !enum_fields.is_empty() {
+            for field in &enum_fields {
+                if let DataType::Enum(values) = &field.data_type {
+                    let const_name = format!("{}Status", capitalize_first(&field.name));
+                    output.push_str(&format!("type {} string\n\n", const_name));
+                    output.push_str("const (\n");
+                    for val in values {
+                        let const_val = format!("{}{}", const_name, capitalize_first(&val));
+                        output.push_str(&format!("\t{} {} = \"{}\"\n", const_val, const_name, val));
+                    }
+                    output.push_str(")\n\n");
+                }
+            }
+        }
+
         output.push_str(&format!("type {} struct {{\n", entity.name));
 
         for field in &entity.fields {
             let go_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
 
-            // Build the GORM struct tags deterministically
             let mut gorm_tags = vec![format!("column:{}", field.name)];
             if field.constraints.is_primary_key {
                 gorm_tags.push("primaryKey".to_string());
@@ -86,7 +103,6 @@ impl LanguageDriver for GoGormDriver {
                 gorm_tags.push("unique".to_string());
             }
 
-            // Go struct fields must be capitalized to be public/exported
             let exported_name = capitalize_first(&field.name);
             output.push_str(&format!(
                 "\t{} {} `gorm:\"{}\" json:\"{}\"`\n",
@@ -125,7 +141,7 @@ impl LanguageDriver for PythonSqlModelDriver {
             DataType::DateTime => "datetime",
             DataType::Json => "dict",
             DataType::Uuid => "UUID",
-            DataType::Enum(_) => "str", // Python enums are typically Enum class, but store as str
+            DataType::Enum(_) => "str",
         };
 
         if is_nullable {
@@ -142,14 +158,39 @@ impl LanguageDriver for PythonSqlModelDriver {
     fn generate_model(&self, entity: &Entity) -> String {
         let mut output = String::new();
 
-        // Generate imports
-        output.push_str("from typing import Optional\nfrom datetime import datetime\nfrom sqlmodel import SQLModel, Field\n\n");
+        output.push_str("from typing import Optional\nfrom datetime import datetime\nfrom decimal import Decimal\nfrom enum import Enum\nfrom sqlmodel import SQLModel, Field\n\n");
 
-        // Generate class definition
+        let enum_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .collect();
+
+        for field in &enum_fields {
+            if let DataType::Enum(values) = &field.data_type {
+                let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                output.push_str(&format!("class {}(str, Enum):\n", enum_name));
+                for val in values {
+                    let const_name = val.to_uppercase();
+                    output.push_str(&format!("    {} = \"{}\"\n", const_name, val));
+                }
+                output.push_str("\n");
+            }
+        }
+
         output.push_str(&format!("class {}(SQLModel, table=True):\n", entity.name));
 
         for field in &entity.fields {
-            let py_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
+            let py_type = if let DataType::Enum(_) = &field.data_type {
+                let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                if field.constraints.is_nullable {
+                    format!("Optional[{}]", enum_name)
+                } else {
+                    enum_name
+                }
+            } else {
+                self.map_data_type(&field.data_type, field.constraints.is_nullable)
+            };
 
             let primary_key_flag = if field.constraints.is_primary_key {
                 "primary_key=True"
@@ -182,7 +223,7 @@ impl LanguageDriver for GoEntDriver {
             DataType::Integer(crate::ir::IntSize::Standard) => "int",
             DataType::Integer(crate::ir::IntSize::Big) => "int64",
             DataType::Float => "float64",
-            DataType::Decimal { .. } => "float64",
+            DataType::Decimal { .. } => "decimal.Decimal", // Use shopspring/decimal
             DataType::Boolean => "bool",
             DataType::DateTime => "time.Time",
             DataType::Json => "json.RawMessage",
@@ -205,7 +246,11 @@ impl LanguageDriver for GoEntDriver {
         let mut output = String::new();
         output.push_str("package models\n\n");
 
-        let mut imports = vec!["\"entgo.io/ent\"", "\"entgo.io/ent/schema/field\""];
+        let mut imports = vec![
+            "\"entgo.io/ent\"",
+            "\"entgo.io/ent/schema/field\"",
+            "\"github.com/shopspring/decimal\"",
+        ];
 
         let has_uuid = entity.fields.iter().any(|f| matches!(f.data_type, DataType::Uuid));
         if has_uuid {
@@ -213,6 +258,27 @@ impl LanguageDriver for GoEntDriver {
         }
 
         output.push_str(&format!("import (\n\t{}\n)\n\n", imports.join("\n\t")));
+
+        let enum_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .collect();
+
+        if !enum_fields.is_empty() {
+            for field in &enum_fields {
+                if let DataType::Enum(values) = &field.data_type {
+                    let const_name = format!("{}Status", capitalize_first(&field.name));
+                    output.push_str(&format!("type {} string\n\n", const_name));
+                    output.push_str("const (\n");
+                    for val in values {
+                        let const_val = format!("{}{}", const_name, capitalize_first(&val));
+                        output.push_str(&format!("\t{} {} = \"{}\"\n", const_val, const_name, val));
+                    }
+                    output.push_str(")\n\n");
+                }
+            }
+        }
 
         output.push_str(&format!("type {} struct {{\n", entity.name));
         output.push_str("\tent.Schema\n");
@@ -225,9 +291,21 @@ impl LanguageDriver for GoEntDriver {
             let _field_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
             let _field_name = capitalize_first(&field.name);
 
+            let ent_field_type = match field.data_type {
+                DataType::Enum(_) => "String",
+                DataType::String { .. } | DataType::Text => "String",
+                DataType::Integer(_) => "Int",
+                DataType::Float => "Float64",
+                DataType::Decimal { .. } => "Other", // Custom type for decimal
+                DataType::Boolean => "Bool",
+                DataType::DateTime => "Time",
+                DataType::Json => "JSON",
+                DataType::Uuid => "UUID",
+            };
+
             output.push_str(&format!(
                 "\t\tfield.{}(\"{}\").\n",
-                if field.constraints.is_primary_key { "UUID" } else { "String" },
+                ent_field_type,
                 field.name
             ));
 
@@ -239,6 +317,13 @@ impl LanguageDriver for GoEntDriver {
             }
             if field.constraints.is_primary_key {
                 output.push_str("\t\t\tDefault(uuid.New).\n");
+            }
+            if matches!(field.data_type, DataType::Decimal { .. }) {
+                output.push_str("\t\t\tSchemaType(map[string]string{\n");
+                output.push_str("\t\t\t\tdialect.Postgres: \"numeric\",\n");
+                output.push_str("\t\t\t\tdialect.MySQL: \"decimal\",\n");
+                output.push_str("\t\t\t\tdialect.SQLite: \"numeric\",\n");
+                output.push_str("\t\t\t}).\n");
             }
             output.push_str(&format!(
                 "\t\t\tStorageKey(\"{}\"),\n",
@@ -268,7 +353,10 @@ impl LanguageDriver for PythonSqlAlchemyDriver {
             DataType::DateTime => "DateTime".to_string(),
             DataType::Json => "JSON".to_string(),
             DataType::Uuid => "Uuid".to_string(),
-            DataType::Enum(_) => "Enum".to_string(),
+            DataType::Enum(values) => {
+                let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                format!("Enum({})", enum_vals)
+            },
         };
 
         if is_nullable {
@@ -285,7 +373,7 @@ impl LanguageDriver for PythonSqlAlchemyDriver {
     fn generate_model(&self, entity: &Entity) -> String {
         let mut output = String::new();
 
-        output.push_str("from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, Text, JSON\n");
+        output.push_str("from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, Text, JSON, Enum\n");
         output.push_str("from sqlalchemy.orm import declarative_base\n");
         output.push_str("from sqlalchemy.dialects.postgresql import UUID\n\n");
 
@@ -295,20 +383,7 @@ impl LanguageDriver for PythonSqlAlchemyDriver {
         output.push_str(&format!("    __tablename__ = '{}'\n\n", entity.name.to_lowercase()));
 
         for field in &entity.fields {
-            let col_type = match field.data_type {
-                DataType::String { .. } => "String".to_string(),
-                DataType::Text => "Text".to_string(),
-                DataType::Integer(crate::ir::IntSize::Small) => "SmallInteger".to_string(),
-                DataType::Integer(crate::ir::IntSize::Standard) => "Integer".to_string(),
-                DataType::Integer(crate::ir::IntSize::Big) => "BigInteger".to_string(),
-                DataType::Float => "Float".to_string(),
-                DataType::Decimal { precision, scale } => format!("Numeric(precision={}, scale={})", precision, scale),
-                DataType::Boolean => "Boolean".to_string(),
-                DataType::DateTime => "DateTime".to_string(),
-                DataType::Json => "JSON".to_string(),
-                DataType::Uuid => "UUID(as_uuid=True)".to_string(),
-                DataType::Enum(_) => "Enum".to_string(),
-            };
+            let col_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
 
             let mut constraints = String::new();
             if field.constraints.is_primary_key {
@@ -316,9 +391,6 @@ impl LanguageDriver for PythonSqlAlchemyDriver {
             }
             if field.constraints.is_unique {
                 constraints.push_str(", unique=True");
-            }
-            if !field.constraints.is_nullable {
-                constraints.push_str(", nullable=False");
             }
 
             output.push_str(&format!(
@@ -346,7 +418,7 @@ impl LanguageDriver for RustDieselDriver {
             DataType::DateTime => "chrono::NaiveDateTime".to_string(),
             DataType::Json => "serde_json::Value".to_string(),
             DataType::Uuid => "uuid::Uuid".to_string(),
-            DataType::Enum(_) => "String".to_string(),
+            DataType::Enum(_) => "String".to_string(), // Placeholder, actual type determined in generate_model
         }
     }
 
@@ -357,14 +429,63 @@ impl LanguageDriver for RustDieselDriver {
     fn generate_model(&self, entity: &Entity) -> String {
         let mut output = String::new();
 
-        output.push_str("use diesel::prelude::*;\nuse serde::{Deserialize, Serialize};\n\n");
+        output.push_str("use diesel::prelude::*;\nuse serde::{Deserialize, Serialize};\nuse diesel::sql_types::{Text, Integer, BigInt, Float, Double, Boolean, Timestamp, Jsonb, Uuid, Numeric};\nuse bigdecimal::BigDecimal;\n\n");
+
+        let enum_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .collect();
+
+        for field in &enum_fields {
+            if let DataType::Enum(values) = &field.data_type {
+                let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                output.push_str(&format!("#[derive(Debug, Clone, Copy, PartialEq, Eq, diesel::deserialize::FromSqlRow, diesel::serialize::ToSql)]\n"));
+                output.push_str(&format!("#[diesel(sql_type = Text)]\n"));
+                output.push_str(&format!("pub enum {} {{\n", enum_name));
+                for val in values {
+                    let variant = capitalize_first(&val);
+                    output.push_str(&format!("    {},\n", variant));
+                }
+                output.push_str("}\n\n");
+
+                output.push_str(&format!("impl diesel::serialize::ToSql<Text, diesel::pg::Pg> for {} {{\n", enum_name));
+                output.push_str("    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {\n");
+                output.push_str("        let s = match self {\n");
+                for val in values {
+                    let variant = capitalize_first(&val);
+                    output.push_str(&format!("            {}::{} => \"{}\",\n", enum_name, variant, val));
+                }
+                output.push_str("        };\n");
+                output.push_str("        out.write_all(s.as_bytes())?;\n");
+                output.push_str("        Ok(diesel::serialize::IsNull::No)\n");
+                output.push_str("    }\n");
+                output.push_str("}\n\n");
+
+                output.push_str(&format!("impl diesel::deserialize::FromSql<Text, diesel::pg::Pg> for {} {{\n", enum_name));
+                output.push_str("    fn from_sql(bytes: diesel::backend::RawValue<'_, diesel::pg::Pg>) -> diesel::deserialize::Result<Self> {\n");
+                output.push_str("        let s = std::str::from_utf8(bytes.as_bytes())?;\n");
+                output.push_str("        match s {\n");
+                for val in values {
+                    let variant = capitalize_first(&val);
+                    output.push_str(&format!("            \"{}\" => Ok({}::{}),\n", val, enum_name, variant));
+                }
+                output.push_str("            _ => Err(format!(\"Invalid variant for {}: {}\", stringify!({}), s).into()),\n");
+                output.push_str("        }\n");
+                output.push_str("    }\n");
+                output.push_str("}\n\n");
+            }
+        }
 
         output.push_str(&format!("#[derive(Queryable, Insertable, Selectable, Serialize, Deserialize, Debug, Clone)]\n"));
         output.push_str(&format!("#[diesel(table_name = {})]\n", entity.name.to_lowercase()));
         output.push_str(&format!("pub struct {} {{\n", entity.name));
 
         for field in &entity.fields {
-            let rust_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
+            let rust_type = match &field.data_type {
+                DataType::Enum(_) => format!("{}Enum", capitalize_first(&field.name)),
+                _ => self.map_data_type(&field.data_type, field.constraints.is_nullable),
+            };
 
             let final_type = if field.constraints.is_nullable {
                 format!("Option<{}>", rust_type)
@@ -395,7 +516,7 @@ impl LanguageDriver for RustSeaOrmDriver {
             DataType::DateTime => "DateTime".to_string(),
             DataType::Json => "Json".to_string(),
             DataType::Uuid => "Uuid".to_string(),
-            DataType::Enum(_) => "String".to_string(),
+            DataType::Enum(_) => "String".to_string(), // Placeholder, actual type determined in generate_model
         };
 
         if is_nullable {
@@ -412,14 +533,44 @@ impl LanguageDriver for RustSeaOrmDriver {
     fn generate_model(&self, entity: &Entity) -> String {
         let mut output = String::new();
 
-        output.push_str("use sea_orm::entity::prelude::*;\nuse serde::{Deserialize, Serialize};\n\n");
+        output.push_str("use sea_orm::entity::prelude::*;\nuse serde::{Deserialize, Serialize};\nuse sea_orm::EnumIter;\nuse std::fmt;\n\n");
+
+        let enum_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .collect();
+
+        for field in &enum_fields {
+            if let DataType::Enum(values) = &field.data_type {
+                let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                output.push_str(&format!("#[derive(Debug, Clone, PartialEq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]\n"));
+                output.push_str(&format!("#[sea_orm(rs_type = \"String\", db_type = \"Enum\", enum_name = \"{}\")]\n", field.name));
+                output.push_str(&format!("pub enum {} {{\n", enum_name));
+                for val in values {
+                    let variant = capitalize_first(&val);
+                    output.push_str(&format!("    #[sea_orm(string_value = \"{}\")]\n", val));
+                    output.push_str(&format!("    {},\n", variant));
+                }
+                output.push_str("}\n\n");
+            }
+        }
 
         output.push_str(&format!("#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Serialize, Deserialize)]\n"));
         output.push_str(&format!("#[sea_orm(table_name = \"{}\")]\n", entity.name.to_lowercase()));
         output.push_str(&format!("pub struct Model {{\n"));
 
         for field in &entity.fields {
-            let sea_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
+            let sea_type = if let DataType::Enum(_) = &field.data_type {
+                let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                if field.constraints.is_nullable {
+                    format!("Option<{}>", enum_name)
+                } else {
+                    enum_name
+                }
+            } else {
+                self.map_data_type(&field.data_type, field.constraints.is_nullable)
+            };
 
             let mut attributes = String::new();
             if field.constraints.is_primary_key {
@@ -458,7 +609,10 @@ impl LanguageDriver for JavaScriptSequelizeDriver {
             DataType::DateTime => "DataTypes.DATE".to_string(),
             DataType::Json => "DataTypes.JSON".to_string(),
             DataType::Uuid => "DataTypes.UUID".to_string(),
-            DataType::Enum(_) => "DataTypes.ENUM".to_string(),
+            DataType::Enum(values) => {
+                let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                format!("DataTypes.ENUM({})", enum_vals)
+            },
         }
     }
 
@@ -503,18 +657,21 @@ pub struct JavaScriptTypeOrmDriver;
 impl LanguageDriver for JavaScriptTypeOrmDriver {
     fn map_data_type(&self, data_type: &DataType, _is_nullable: bool) -> String {
         match data_type {
-            DataType::String { .. } => "String".to_string(),
-            DataType::Text => "Text".to_string(),
-            DataType::Integer(crate::ir::IntSize::Small) => "SmallInt".to_string(),
-            DataType::Integer(crate::ir::IntSize::Standard) => "Int".to_string(),
-            DataType::Integer(crate::ir::IntSize::Big) => "BigInt".to_string(),
-            DataType::Float => "Float".to_string(),
-            DataType::Decimal { precision, scale } => format!("Decimal({}, {})", precision, scale),
-            DataType::Boolean => "Boolean".to_string(),
-            DataType::DateTime => "Timestamp".to_string(),
-            DataType::Json => "Json".to_string(),
-            DataType::Uuid => "Uuid".to_string(),
-            DataType::Enum(_) => "Enum".to_string(),
+            DataType::String { .. } => "varchar".to_string(),
+            DataType::Text => "text".to_string(),
+            DataType::Integer(crate::ir::IntSize::Small) => "smallint".to_string(),
+            DataType::Integer(crate::ir::IntSize::Standard) => "int".to_string(),
+            DataType::Integer(crate::ir::IntSize::Big) => "bigint".to_string(),
+            DataType::Float => "float".to_string(),
+            DataType::Decimal { precision, scale } => format!("decimal({}, {})", precision, scale),
+            DataType::Boolean => "boolean".to_string(),
+            DataType::DateTime => "timestamp".to_string(),
+            DataType::Json => "json".to_string(),
+            DataType::Uuid => "uuid".to_string(),
+            DataType::Enum(values) => {
+                let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                format!("enum({})", enum_vals)
+            },
         }
     }
 
@@ -546,12 +703,42 @@ impl LanguageDriver for JavaScriptTypeOrmDriver {
                 }
 
                 output.push_str("  @Column({\n");
-                output.push_str(&format!("    type: '{}',\n", col_type.to_lowercase()));
+                output.push_str(&format!("    type: '{}',\n", col_type));
                 if !col_options.is_empty() {
                     output.push_str(&format!("    {}\n", col_options));
                 }
                 output.push_str("  })\n");
-                output.push_str(&format!("  {}: {};\n\n", field.name, col_type));
+
+                let ts_type = match &field.data_type {
+                    DataType::Boolean => "boolean".to_string(),
+                    DataType::Integer(_) => "number".to_string(),
+                    DataType::Float | DataType::Decimal { .. } => "number".to_string(),
+                    DataType::Enum(_) => format!("{}Enum", capitalize_first(&field.name)),
+                    _ => "string".to_string(),
+                };
+
+                output.push_str(&format!("  {}: {};\n\n", field.name, ts_type));
+            }
+        }
+
+        // Add enum type definitions at the end
+        let enum_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .collect();
+
+        if !enum_fields.is_empty() {
+            for field in &enum_fields {
+                if let DataType::Enum(values) = &field.data_type {
+                    let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                    output.push_str(&format!("export enum {} {{\n", enum_name));
+                    for val in values {
+                        let const_name = val.to_uppercase();
+                        output.push_str(&format!("    {} = '{}',\n", const_name, val));
+                    }
+                    output.push_str("}\n\n");
+                }
             }
         }
 
@@ -576,7 +763,12 @@ impl LanguageDriver for TypeScriptPrismaDriver {
             DataType::DateTime => "DateTime".to_string(),
             DataType::Json => "Json".to_string(),
             DataType::Uuid => "String @id @default(uuid())".to_string(),
-            DataType::Enum(_) => "String".to_string(),
+            DataType::Enum(values) => {
+                let enum_name = capitalize_first(
+                    values.first().map(|v| v.as_str()).unwrap_or("Status")
+                );
+                format!("{}", enum_name)
+            },
         }
     }
 
@@ -587,11 +779,38 @@ impl LanguageDriver for TypeScriptPrismaDriver {
     fn generate_model(&self, entity: &Entity) -> String {
         let mut output = String::new();
 
+        let enum_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .collect();
+
+        if !enum_fields.is_empty() {
+            for field in &enum_fields {
+                if let DataType::Enum(values) = &field.data_type {
+                    let enum_name = format!("{}", capitalize_first(&field.name));
+                    output.push_str(&format!("enum {} {{\n", enum_name));
+                    for val in values {
+                        let variant = val.to_uppercase();
+                        output.push_str(&format!("  {}\n", variant));
+                    }
+                    output.push_str("}\n\n");
+                }
+            }
+        }
+
         output.push_str(&format!("model {} {{\n", entity.name));
 
         for field in &entity.fields {
             let prisma_type = if field.constraints.is_primary_key && matches!(field.data_type, DataType::Uuid) {
                 "String @id @default(uuid())".to_string()
+            } else if let DataType::Enum(_) = &field.data_type {
+                let enum_name = format!("{}", capitalize_first(&field.name));
+                if field.constraints.is_nullable {
+                    format!("{}?", enum_name)
+                } else {
+                    enum_name
+                }
             } else {
                 let base_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
                 if field.constraints.is_nullable {
@@ -634,7 +853,10 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
             DataType::DateTime => "timestamp".to_string(),
             DataType::Json => "json".to_string(),
             DataType::Uuid => "uuid".to_string(),
-            DataType::Enum(_) => "varchar".to_string(),
+            DataType::Enum(values) => {
+                let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                format!("enum({})", enum_vals)
+            },
         }
     }
 
@@ -676,10 +898,31 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
                     DataType::Boolean => "boolean".to_string(),
                     DataType::Integer(_) => "number".to_string(),
                     DataType::Float | DataType::Decimal { .. } => "number".to_string(),
+                    DataType::Enum(_) => format!("{}Enum", capitalize_first(&field.name)),
                     _ => "string".to_string(),
                 };
 
                 output.push_str(&format!("  {}: {};\n\n", field.name, ts_type));
+            }
+        }
+
+        let enum_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .collect();
+
+        if !enum_fields.is_empty() {
+            for field in &enum_fields {
+                if let DataType::Enum(values) = &field.data_type {
+                    let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                    output.push_str(&format!("export enum {} {{\n", enum_name));
+                    for val in values {
+                        let const_name = val.to_uppercase();
+                        output.push_str(&format!("    {} = '{}',\n", const_name, val));
+                    }
+                    output.push_str("}\n\n");
+                }
             }
         }
 
