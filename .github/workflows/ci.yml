@@ -95,6 +95,9 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      sqlite:
+        image: alpine:latest
+        run: sleep infinity
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -113,3 +116,4 @@ jobs:
         env:
           TEST_POSTGRES_URL: postgresql://test:test@localhost:5432/valkyrin_test
           TEST_MYSQL_URL: mysql://root:test@localhost:3306/valkyrin_test
+          TEST_SQLITE_URL: sqlite:///tmp/valkyrin_test.db
