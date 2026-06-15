@@ -580,6 +580,20 @@ impl DatabaseIntrospector for SqliteIntrospector {
 }
 
 // ──────────────────────────────────────────────
+// Migration
+// ──────────────────────────────────────────────
+
+/// Represents a database migration with up and down SQL.
+#[derive(Debug, Clone)]
+pub struct Migration {
+    pub version: String,
+    pub name: String,
+    pub up_sql: String,
+    pub down_sql: String,
+    pub created_at: u64,
+}
+
+// ──────────────────────────────────────────────
 // Diff Engine
 // ──────────────────────────────────────────────
 
@@ -710,7 +724,7 @@ impl SyncEngine {
         }
     }
 
-    /// Generates a human-readable diff report string
+/// Generates a human-readable diff report string
     pub fn format_diff_report(diff: &DetailedDiff) -> String {
         let mut report = String::new();
         let has_content = !diff.new_tables.is_empty()
@@ -918,8 +932,118 @@ impl SyncEngine {
         statements
     }
 
+    /// Generates reverse migration statements (DOWN) to rollback the up migration.
+    pub fn generate_down_migration(
+        local_schema: &[Entity],
+        diff: &DetailedDiff,
+        db_type: DatabaseType,
+    ) -> Vec<String> {
+        let mut statements = Vec::new();
+
+        // For removed tables in diff (tables that existed in DB but not in canvas),
+        // the DOWN migration should CREATE them back
+        for table_name in &diff.removed_tables {
+            // Find the table in local_schema (the canvas has the original definition)
+            if let Some(entity) = local_schema.iter().find(|e| e.name == *table_name) {
+                let cols: Vec<String> = entity
+                    .fields
+                    .iter()
+                    .map(|f| {
+                        let sql_type = Self::ir_type_to_sql(&f.data_type, db_type);
+                        let mut parts = vec![format!("    \"{}\" {}", f.name, sql_type)];
+                        if f.constraints.is_primary_key {
+                            parts.push("PRIMARY KEY".to_string());
+                        }
+                        if !f.constraints.is_nullable {
+                            parts.push("NOT NULL".to_string());
+                        }
+                        if f.constraints.is_unique {
+                            parts.push("UNIQUE".to_string());
+                        }
+                        if let Some(ref def) = f.constraints.default_value {
+                            parts.push(format!("DEFAULT {}", def));
+                        }
+                        parts.join(" ")
+                    })
+                    .collect();
+
+                statements.push(format!(
+                    "CREATE TABLE \"{}\" (\n{});",
+                    table_name,
+                    cols.join(",\n"),
+                ));
+            }
+        }
+
+        // For new tables in diff (tables that exist in DB but not in canvas),
+        // the DOWN migration should DROP them
+        for entity in &diff.new_tables {
+            statements.push(format!("DROP TABLE IF EXISTS \"{}\";", entity.name));
+        }
+
+        // For modified tables, reverse the column changes
+        for td in &diff.modified_tables {
+            // Reverse: DROP columns that were ADDED
+            for f in &td.adds {
+                statements.push(format!(
+                    "ALTER TABLE \"{}\" DROP COLUMN IF EXISTS \"{}\";",
+                    td.table_name, f.name
+                ));
+            }
+            // Reverse: ADD back columns that were REMOVED
+            for f in &td.removes {
+                let sql_type = Self::ir_type_to_sql(&f.data_type, db_type);
+                let nullable = if f.constraints.is_nullable {
+                    ""
+                } else {
+                    " NOT NULL"
+                };
+                statements.push(format!(
+                    "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}{};",
+                    td.table_name, f.name, sql_type, nullable
+                ));
+            }
+            // Note: Type changes, nullable changes, etc. are harder to reverse perfectly
+            // without storing the original schema. For now, we skip reversing modifications.
+        }
+
+        statements
+    }
+
+    /// Creates a complete Migration struct with both up and down SQL.
+    pub fn create_migration(
+        local_schema: &[Entity],
+        diff: &DetailedDiff,
+        db_type: DatabaseType,
+        name: &str,
+    ) -> Option<Migration> {
+        let up_statements = Self::generate_migration(local_schema, diff, db_type);
+        let down_statements = Self::generate_down_migration(local_schema, diff, db_type);
+
+        if up_statements.is_empty() && down_statements.is_empty() {
+            return None;
+        }
+
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let version = format!("{}_{}", timestamp, name.replace(' ', "_"));
+
+        Some(Migration {
+            version: version.clone(),
+            name: name.to_string(),
+            up_sql: up_statements.join("\n\n"),
+            down_sql: down_statements.join("\n\n"),
+            created_at: timestamp,
+        })
+    }
+
     /// Writes migration statements to a timestamped SQL file in the migrations/ directory.
     pub fn write_migration_file(
+        local_schema: &[Entity],
+        diff: &DetailedDiff,
         statements: &[String],
         db_type: DatabaseType,
     ) -> AnyhowResult<Option<String>> {
@@ -946,6 +1070,7 @@ impl SyncEngine {
         content.push_str("-- Valkyrin Auto-generated Migration\n");
         content.push_str(&format!("-- Database: {}\n", db_suffix));
         content.push_str(&format!("-- Timestamp: {}\n\n", timestamp));
+        content.push_str("-- UP\n");
 
         for stmt in statements {
             content.push_str(stmt);
@@ -954,6 +1079,26 @@ impl SyncEngine {
 
         fs::write(&filename, content)?;
         println!("📝 Migration written to: {}", filename);
+
+        // Also write DOWN migration file
+        let down_filename = format!("{}/{}_migration_{}.down.sql", migration_dir, db_suffix, timestamp);
+        let down_sql = Self::generate_down_migration(local_schema, diff, db_type);
+        if !down_sql.is_empty() {
+            let mut down_content = String::new();
+            down_content.push_str("-- Valkyrin Auto-generated Migration (DOWN)\n");
+            down_content.push_str(&format!("-- Database: {}\n", db_suffix));
+            down_content.push_str(&format!("-- Timestamp: {}\n\n", timestamp));
+            down_content.push_str("-- DOWN\n");
+
+            for stmt in down_sql {
+                down_content.push_str(&stmt);
+                down_content.push_str("\n\n");
+            }
+
+            fs::write(&down_filename, down_content)?;
+            println!("📝 Down migration written to: {}", down_filename);
+        }
+
         Ok(Some(filename))
     }
 
@@ -1165,6 +1310,130 @@ impl SyncEngine {
         }
 
         Self::execute_migration(db_url, db_type, &statements).await
+    }
+
+    /// Rolls back the last N migrations by executing their DOWN SQL.
+    pub async fn rollback_migrations(
+        db_url: &str,
+        explicit_db_type: Option<&str>,
+        steps: usize,
+        dry_run: bool,
+    ) -> AnyhowResult<()> {
+        // Determine DB type
+        let db_type = if let Some(db_type_str) = explicit_db_type {
+            match db_type_str.to_lowercase().as_str() {
+                "postgres" | "postgresql" => DatabaseType::PostgreSQL,
+                "mysql" => DatabaseType::MySQL,
+                "sqlite" => DatabaseType::SQLite,
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.",
+                        db_type_str
+                    ))
+                }
+            }
+        } else {
+            DatabaseType::from_url(db_url)?
+        };
+
+        // Find migration files for the DB type
+        let suffix = match db_type {
+            DatabaseType::PostgreSQL => "postgres",
+            DatabaseType::MySQL => "mysql",
+            DatabaseType::SQLite => "sqlite",
+        };
+        let migration_dir = std::path::Path::new("migrations");
+        let mut candidates: Vec<std::path::PathBuf> = fs::read_dir(migration_dir)?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("sql"))
+                    .unwrap_or(false)
+            })
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.contains(suffix))
+                    .unwrap_or(false)
+            })
+            .collect();
+
+        // Sort by filename (timestamp part) descending (newest first)
+        candidates.sort_by(|a, b| b.cmp(a));
+
+        if candidates.is_empty() {
+            println!("⚠️  No migration files found for {}", suffix);
+            return Ok(());
+        }
+
+        // Take the last N migrations to rollback
+        let to_rollback = candidates.into_iter().take(steps).collect::<Vec<_>>();
+
+        for path in to_rollback {
+            println!("⏪ Rolling back migration: {}", path.display());
+            let content = fs::read_to_string(&path)?;
+
+            // Parse the migration file to extract DOWN SQL
+            // Migration files have format: -- DOWN SQL at the end or separate file
+            // For now, we'll look for a corresponding .down.sql file or parse -- DOWN: comments
+            let down_path = path.with_extension("down.sql");
+            let down_sql = if down_path.exists() {
+                fs::read_to_string(&down_path)?
+            } else {
+                // Try to extract DOWN SQL from comments in the migration file
+                let mut down_stmts = Vec::new();
+                let mut in_down_section = false;
+                for line in content.lines() {
+                    if line.trim() == "-- DOWN" {
+                        in_down_section = true;
+                        continue;
+                    }
+                    if in_down_section {
+                        if line.trim().starts_with("-- UP") || line.trim().starts_with("--") {
+                            break;
+                        }
+                        down_stmts.push(line);
+                    }
+                }
+                down_stmts.join("\n")
+            };
+
+            if down_sql.trim().is_empty() {
+                println!("   ⚠️  No DOWN SQL found for {}, skipping", path.display());
+                continue;
+            }
+
+            if dry_run {
+                println!("   [DRY-RUN] Would execute DOWN migration:");
+                for stmt in down_sql.split(';') {
+                    let trimmed = stmt.trim();
+                    if !trimmed.is_empty() && !trimmed.starts_with("--") {
+                        println!("     ▶ {};", trimmed);
+                    }
+                }
+            } else {
+                let mut statements = Vec::new();
+                for stmt in down_sql.split(';') {
+                    let trimmed = stmt.trim();
+                    if trimmed.is_empty() || trimmed.starts_with("--") {
+                        continue;
+                    }
+                    statements.push(format!("{};", trimmed));
+                }
+                if !statements.is_empty() {
+                    println!("📜 Executing {} DOWN statements:", statements.len());
+                    for s in &statements {
+                        println!("   ▶ {}", s);
+                    }
+                    Self::execute_migration(db_url, db_type, &statements).await?;
+                    println!("✅ Rolled back: {}", path.display());
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Pushes canvas changes to the database, optionally applying destructive changes.
@@ -1423,7 +1692,7 @@ impl SyncEngine {
             }
             // Write migration file (except in dry-run mode)
             if mode != SyncMode::DryRun {
-                Self::write_migration_file(&migration_stmts, db_type)?;
+                Self::write_migration_file(&local_ir.entities, &diff, &migration_stmts, db_type)?;
             }
         }
 

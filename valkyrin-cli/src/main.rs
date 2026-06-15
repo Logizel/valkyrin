@@ -63,6 +63,20 @@ enum Commands {
         #[arg(short, long)]
         db_type: Option<String>,
     },
+    Rollback {
+        /// Database connection string (auto-detects type from URL prefix)
+        #[arg(short, long)]
+        url: String,
+        /// Override auto-detection: 'postgres', 'mysql', or 'sqlite'
+        #[arg(short, long)]
+        db_type: Option<String>,
+        /// Number of migrations to rollback (default: 1)
+        #[arg(short, long, default_value = "1")]
+        steps: usize,
+        /// Preview changes without executing
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
 }
 
 #[tokio::main]
@@ -196,6 +210,19 @@ async fn execute_command(command: Commands) -> Result<()> {
                 "=>".blue().bold()
             );
             valkyrin_core::sync::SyncEngine::check_sync(&url, db_type.as_deref()).await?;
+        }
+        Commands::Rollback {
+            url,
+            db_type,
+            steps,
+            dry_run,
+        } => {
+            println!(
+                "{} Rolling back {} migration(s)...",
+                "=>".yellow().bold(),
+                steps
+            );
+            valkyrin_core::sync::SyncEngine::rollback_migrations(&url, db_type.as_deref(), steps, dry_run).await?;
         }
     }
     Ok(())
