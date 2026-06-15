@@ -913,6 +913,54 @@ impl SyncEngine {
         Ok(Some(filename))
     }
 
+    /// Executes a list of migration statements against the target database.
+    pub async fn execute_migration(
+        db_url: &str,
+        db_type: DatabaseType,
+        statements: &[String],
+    ) -> AnyhowResult<()> {
+        if statements.is_empty() {
+            println!("✅ No migration statements to execute.");
+            return Ok(());
+        }
+
+        println!("🚀 Executing migration against {}...", match db_type {
+            DatabaseType::PostgreSQL => "PostgreSQL",
+            DatabaseType::MySQL => "MySQL",
+            DatabaseType::SQLite => "SQLite",
+        });
+
+        match db_type {
+            DatabaseType::PostgreSQL => {
+                let pool = sqlx::Pool::<sqlx::Postgres>::connect(db_url).await?;
+                for stmt in statements {
+                    println!("   ▶ {}", stmt);
+                    sqlx::query(stmt).execute(&pool).await
+                        .context(format!("Failed to execute: {}", stmt))?;
+                }
+            }
+            DatabaseType::MySQL => {
+                let pool = sqlx::Pool::<sqlx::MySql>::connect(db_url).await?;
+                for stmt in statements {
+                    println!("   ▶ {}", stmt);
+                    sqlx::query(stmt).execute(&pool).await
+                        .context(format!("Failed to execute: {}", stmt))?;
+                }
+            }
+            DatabaseType::SQLite => {
+                let pool = sqlx::Pool::<sqlx::Sqlite>::connect(db_url).await?;
+                for stmt in statements {
+                    println!("   ▶ {}", stmt);
+                    sqlx::query(stmt).execute(&pool).await
+                        .context(format!("Failed to execute: {}", stmt))?;
+                }
+            }
+        }
+
+        println!("✅ Migration executed successfully.");
+        Ok(())
+    }
+
     /// Converts a Valkyrin DataType to an SQL type string for the given database.
     fn ir_type_to_sql(dt: &DataType, db_type: DatabaseType) -> String {
         match dt {
@@ -990,6 +1038,247 @@ impl SyncEngine {
         }
 
         (max_x + 300.0, base_y)
+    }
+
+    /// Runs a migration file (or the latest migration) against the target database.
+    pub async fn run_migrations(
+        db_url: &str,
+        explicit_db_type: Option<&str>,
+        migration_file: Option<&str>,
+    ) -> AnyhowResult<()> {
+        // Determine DB type
+        let db_type = if let Some(db_type_str) = explicit_db_type {
+            match db_type_str.to_lowercase().as_str() {
+                "postgres" | "postgresql" => DatabaseType::PostgreSQL,
+                "mysql" => DatabaseType::MySQL,
+                "sqlite" => DatabaseType::SQLite,
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.",
+                        db_type_str
+                    ))
+                }
+            }
+        } else {
+            DatabaseType::from_url(db_url)?
+        };
+
+        // Resolve migration file path
+        let path = if let Some(p) = migration_file {
+            std::path::PathBuf::from(p)
+        } else {
+            // Find the latest migration file for the DB type
+            let suffix = match db_type {
+                DatabaseType::PostgreSQL => "postgres",
+                DatabaseType::MySQL => "mysql",
+                DatabaseType::SQLite => "sqlite",
+            };
+            let migration_dir = std::path::Path::new("migrations");
+            let mut candidates: Vec<std::path::PathBuf> = fs::read_dir(migration_dir)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext.eq_ignore_ascii_case("sql"))
+                        .unwrap_or(false)
+                })
+                .filter(|p| {
+                    p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.contains(suffix))
+                        .unwrap_or(false)
+                })
+                .collect();
+            // Sort by filename (timestamp part) descending
+            candidates.sort_by(|a, b| b.cmp(a));
+            candidates
+                .into_iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("No migration files found for {}", suffix))?
+        };
+
+        println!("🗂️  Running migration file: {}", path.display());
+        let content = fs::read_to_string(&path)?;
+        // Split on ';' to get statements (ignore comments starting with '--')
+        let mut statements = Vec::new();
+        for stmt in content.split(';') {
+            let trimmed = stmt.trim();
+            if trimmed.is_empty() || trimmed.starts_with("--") {
+                continue;
+            }
+            statements.push(format!("{};", trimmed));
+        }
+        if statements.is_empty() {
+            println!("⚠️  No executable statements found in migration file.");
+            return Ok(());
+        }
+
+        // Show statements
+        println!("📜 Executing {} statements:", statements.len());
+        for s in &statements {
+            println!("   ▶ {}", s);
+        }
+
+        Self::execute_migration(db_url, db_type, &statements).await
+    }
+
+    /// Pushes canvas changes to the database, optionally applying destructive changes.
+    pub async fn push_to_database(
+        db_url: &str,
+        explicit_db_type: Option<&str>,
+        confirm: bool,
+        dry_run: bool,
+    ) -> AnyhowResult<()> {
+        // Determine DB type
+        let db_type = if let Some(db_type_str) = explicit_db_type {
+            match db_type_str.to_lowercase().as_str() {
+                "postgres" | "postgresql" => DatabaseType::PostgreSQL,
+                "mysql" => DatabaseType::MySQL,
+                "sqlite" => DatabaseType::SQLite,
+                _ => {
+                    return Err(anyhow::anyhow!(
+                        "Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.",
+                        db_type_str
+                    ))
+                }
+            }
+        } else {
+            DatabaseType::from_url(db_url)?
+        };
+
+        println!("🔍 Introspecting live {} schema...", match db_type {
+            DatabaseType::PostgreSQL => "PostgreSQL",
+            DatabaseType::MySQL => "MySQL",
+            DatabaseType::SQLite => "SQLite",
+        });
+
+        // Introspect live schema
+        let (live_schema, _detected_relations) = match db_type {
+            DatabaseType::PostgreSQL => {
+                let introspector = PostgresIntrospector::new(db_url).await?;
+                let schema = introspector.fetch_schema().await?;
+                let relations = introspector.fetch_relations().await?;
+                (schema, relations)
+            }
+            DatabaseType::MySQL => {
+                let introspector = MysqlIntrospector::new(db_url).await?;
+                let schema = introspector.fetch_schema().await?;
+                let relations = introspector.fetch_relations().await?;
+                (schema, relations)
+            }
+            DatabaseType::SQLite => {
+                let introspector = SqliteIntrospector::new(db_url).await?;
+                let schema = introspector.fetch_schema().await?;
+                let relations = introspector.fetch_relations().await?;
+                (schema, relations)
+            }
+        };
+
+        // Load canvas
+        let local_file = fs::read_to_string("schema.vdb.json")
+            .unwrap_or_else(|_| r#"{"tables":[],"relations":[]}"#.to_string());
+        let payload: crate::canvas::CanvasPayload =
+            serde_json::from_str(&local_file).context("Failed to parse local schema.vdb.json")?;
+        let canvas_ir = payload.to_ir();
+
+        // Compute diff from canvas to DB (swap arguments)
+        let mut diff = Self::calculate_detailed_diff(&canvas_ir.entities, &live_schema);
+
+        // Generate migration statements (forward direction: DB -> canvas)
+        // For push we need opposite: apply canvas => DB changes.
+        let mut statements = Vec::new();
+
+        // DROP tables that exist in DB but not in canvas (destructive)
+        for tbl in &diff.removed_tables {
+            if confirm {
+                statements.push(format!("DROP TABLE IF EXISTS \"{}\";", tbl));
+            } else {
+                println!("⚠️  Table '{}' would be dropped. Use --confirm to apply.", tbl);
+            }
+        }
+
+        // CREATE tables that are in canvas but not in DB
+        for entity in diff.new_tables.iter() {
+            let cols: Vec<String> = entity
+                .fields
+                .iter()
+                .map(|f| {
+                    let sql_type = Self::ir_type_to_sql(&f.data_type, db_type);
+                    let mut parts = vec![format!("    \"{}\" {}", f.name, sql_type)];
+                    if f.constraints.is_primary_key {
+                        parts.push("PRIMARY KEY".to_string());
+                    }
+                    if !f.constraints.is_nullable {
+                        parts.push("NOT NULL".to_string());
+                    }
+                    if f.constraints.is_unique {
+                        parts.push("UNIQUE".to_string());
+                    }
+                    if let Some(ref def) = f.constraints.default_value {
+                        parts.push(format!("DEFAULT {}", def));
+                    }
+                    parts.join(" ")
+                })
+                .collect();
+            statements.push(format!(
+                "CREATE TABLE \"{}\" (\n{},\n    \"id\" UUID PRIMARY KEY\n);",
+                entity.name,
+                cols.join(",\n")
+            ));
+        }
+
+        // ALTER TABLE for column additions and removals (destructive removals need confirm)
+        for td in &diff.modified_tables {
+            // Columns to add (present in canvas but not DB) – these are in td.adds when we swapped arguments
+            for f in &td.adds {
+                let sql_type = Self::ir_type_to_sql(&f.data_type, db_type);
+                let nullable = if f.constraints.is_nullable { "" } else { " NOT NULL" };
+                statements.push(format!(
+                    "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}{};",
+                    td.table_name, f.name, sql_type, nullable
+                ));
+            }
+            // Columns to drop (present in DB but not canvas) – these are in td.removes
+            for f in &td.removes {
+                if confirm {
+                    statements.push(format!(
+                        "ALTER TABLE \"{}\" DROP COLUMN \"{}\";",
+                        td.table_name, f.name
+                    ));
+                } else {
+                    println!(
+                        "⚠️  Column '{}' in table '{}' would be dropped. Use --confirm to apply.",
+                        f.name, td.table_name
+                    );
+                }
+            }
+        }
+
+        if statements.is_empty() {
+            println!("✅ No changes detected between canvas and database.");
+            return Ok(());
+        }
+
+        // Show migration plan
+        println!("\n📝 Migration plan ({} statements):", statements.len());
+        for s in &statements {
+            println!("   {}", s);
+        }
+
+        if dry_run {
+            println!("🏁 Dry-run complete. No changes applied.");
+            return Ok(());
+        }
+
+        // Execute statements
+        Self::execute_migration(db_url, db_type, &statements).await
+    }
+
+    /// Checks synchronization status between canvas and database (dry-run diff).
+    pub async fn check_sync(db_url: &str, explicit_db_type: Option<&str>) -> AnyhowResult<()> {
+        // Reuse synchronize_database in DryRun mode but suppress file writes
+        Self::synchronize_database(db_url, explicit_db_type, SyncMode::DryRun).await
     }
 
     /// Connects to a database, diffs the live schema against the local canvas,

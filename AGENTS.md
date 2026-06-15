@@ -87,4 +87,12 @@ All 6 master plan phases are **complete**:
 7. **config.rs** validates supported language/ORM combinations with `ensure!`.
 8. **compiler.rs** auto-disambiguates duplicate table names and sanitizes filenames.
 
-You need to push the code to GitHub every time you finish testing the new feature that is added.
+_VERY IMPORTANT_
+
+## The main thing about valkyrin is that it is supposed to not include ai and should be local and should run without any internet
+
+## Dont add bloated features
+
+## Keep everything production grade
+
+## Commit the code after every successfull change

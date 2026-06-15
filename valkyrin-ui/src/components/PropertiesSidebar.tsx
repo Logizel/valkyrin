@@ -423,7 +423,7 @@ export default function PropertiesSidebar({
                         className="w-4 h-4 rounded accent-cyan-500"
                       />
                       <span className="text-sm font-medium text-white group-hover:text-cyan-300 transition-colors">
-                        Primary Key 🔑
+                        Primary Key
                       </span>
                     </label>
 
@@ -474,7 +474,7 @@ export default function PropertiesSidebar({
                         className="w-4 h-4 rounded accent-cyan-500"
                       />
                       <span className="text-sm font-medium text-white group-hover:text-cyan-300 transition-colors">
-                        Indexed 📇
+                        Indexed
                       </span>
                     </label>
                   </div>

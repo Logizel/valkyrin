@@ -30,6 +30,39 @@ enum Commands {
         #[arg(short = 'n', long)]
         dry_run: bool,
     },
+    Migrate {
+        /// Database connection string (auto-detects type from URL prefix)
+        #[arg(short, long)]
+        url: String,
+        /// Override auto-detection: 'postgres', 'mysql', or 'sqlite'
+        #[arg(short, long)]
+        db_type: Option<String>,
+        /// Path to migration file (defaults to latest in migrations/)
+        #[arg(short, long)]
+        file: Option<String>,
+    },
+    Push {
+        /// Database connection string (auto-detects type from URL prefix)
+        #[arg(short, long)]
+        url: String,
+        /// Override auto-detection: 'postgres', 'mysql', or 'sqlite'
+        #[arg(short, long)]
+        db_type: Option<String>,
+        /// Confirm destructive changes (DROP COLUMN, etc.)
+        #[arg(short, long)]
+        confirm: bool,
+        /// Preview changes without executing
+        #[arg(short = 'n', long)]
+        dry_run: bool,
+    },
+    Check {
+        /// Database connection string (auto-detects type from URL prefix)
+        #[arg(short, long)]
+        url: String,
+        /// Override auto-detection: 'postgres', 'mysql', or 'sqlite'
+        #[arg(short, long)]
+        db_type: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -130,6 +163,39 @@ async fn execute_command(command: Commands) -> Result<()> {
                 mode,
             )
             .await?;
+        }
+        Commands::Migrate {
+            url,
+            db_type,
+            file,
+        } => {
+            println!(
+                "{} Running database migrations...",
+                "=>".magenta().bold()
+            );
+            valkyrin_core::sync::SyncEngine::run_migrations(&url, db_type.as_deref(), file.as_deref()).await?;
+        }
+        Commands::Push {
+            url,
+            db_type,
+            confirm,
+            dry_run,
+        } => {
+            println!(
+                "{} Pushing canvas changes to database...",
+                "=>".green().bold()
+            );
+            valkyrin_core::sync::SyncEngine::push_to_database(&url, db_type.as_deref(), confirm, dry_run).await?;
+        }
+        Commands::Check {
+            url,
+            db_type,
+        } => {
+            println!(
+                "{} Checking database synchronization status...",
+                "=>".blue().bold()
+            );
+            valkyrin_core::sync::SyncEngine::check_sync(&url, db_type.as_deref()).await?;
         }
     }
     Ok(())

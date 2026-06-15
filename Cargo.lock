@@ -2366,6 +2366,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "bigdecimal",
+ "dotenvy",
  "regex",
  "rust_decimal",
  "serde",

@@ -483,7 +483,7 @@ export default function App() {
               className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg font-bold shadow-lg transition-colors"
               title="Save schema to disk (Ctrl+S)"
             >
-              💾 Save
+              Save
             </button>
             <span className="text-xs text-zinc-400 whitespace-nowrap">
               Ctrl+S

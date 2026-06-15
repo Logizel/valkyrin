@@ -9,11 +9,11 @@ interface TableNodeProps {
 
 /**
  * TableNode: A beautifully designed table node with constraint icons
- * Displays columns with at-a-glance visual indicators for:
- * - Primary Key (🔑)
- * - Unique constraint (U)
- * - Indexed (📇)
- * - Nullable (⊘)
+  * Displays columns with at-a-glance visual indicators for:
+  * - Primary Key (PK)
+  * - Unique constraint (U)
+  * - Indexed (IDX)
+  * - Nullable (Ø)
  */
 export default function TableNode({
   id,
@@ -67,7 +67,7 @@ export default function TableNode({
           className="absolute right-2 top-2 text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity font-bold p-1 hover:bg-red-900/20 rounded"
           title="Delete table"
         >
-          ✕
+          X
         </button>
       </div>
 
@@ -143,7 +143,7 @@ function ColumnRow({
               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-yellow-900/30 border border-yellow-600/50 text-yellow-400 rounded text-[10px] font-semibold"
               title="Primary Key"
             >
-              🔑 PK
+              PK
             </span>
           )}
           {column.is_unique && (
@@ -159,7 +159,7 @@ function ColumnRow({
               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-blue-900/30 border border-blue-600/50 text-blue-300 rounded text-[10px] font-semibold"
               title="Indexed"
             >
-              📇 IDX
+              IDX
             </span>
           )}
           {column.is_nullable && (
@@ -167,7 +167,7 @@ function ColumnRow({
               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-zinc-700/50 border border-zinc-600/50 text-zinc-400 rounded text-[10px]"
               title="Nullable"
             >
-              ⊘
+              Ø
             </span>
           )}
           {column.default_value && (
@@ -175,7 +175,7 @@ function ColumnRow({
               className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-green-900/20 border border-green-600/30 text-green-400 rounded text-[10px]"
               title={`Default: ${column.default_value}`}
             >
-              ≈
+              D
             </span>
           )}
         </div>
@@ -190,7 +190,7 @@ function ColumnRow({
         className="ml-2 text-red-400 hover:text-red-300 opacity-0 group-hover/col:opacity-100 transition-opacity font-bold p-1 flex-shrink-0 hover:bg-red-900/20 rounded"
         title="Delete column"
       >
-        ✕
+         X
       </button>
     </div>
   );

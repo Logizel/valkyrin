@@ -1,0 +1,3 @@
+language: go
+orm: gorm
+database_url_env: DATABASE_URL
