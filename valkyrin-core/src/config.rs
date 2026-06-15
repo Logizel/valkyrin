@@ -1,5 +1,6 @@
 // valkyrin-core/src/config.rs
 use anyhow::{Context, Result, ensure};
+use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
@@ -31,6 +32,7 @@ const SUPPORTED_BACKENDS: &[(&str, &[&str])] = &[
 ];
 
 pub fn initialize_workspace() -> Result<()> {
+    dotenv().ok();
     if !Path::new("valkyrin.yaml").exists() {
         let default_config = ValkyrinConfig::default();
         let yaml = serde_yaml::to_string(&default_config)?;
@@ -51,6 +53,7 @@ pub fn initialize_workspace() -> Result<()> {
 }
 
 pub fn load_config() -> Result<ValkyrinConfig> {
+    dotenv().ok();
     let contents = fs::read_to_string("valkyrin.yaml")
         .context("valkyrin.yaml not found. Run 'valkyrin init' to create it.")?;
 

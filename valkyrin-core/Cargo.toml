@@ -18,3 +18,4 @@ tree-sitter = "0.26.9"
 tree-sitter-go = "0.25.0"
 tree-sitter-python = "0.25.0"
 uuid = { version = "1.23.2", features = ["v4"] }
+dotenvy = "0.15"
