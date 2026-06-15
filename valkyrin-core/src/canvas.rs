@@ -124,6 +124,7 @@ impl CanvasPayload {
         EntityGraph {
             entities,
             connections,
+            relations: Vec::new(),
         }
     }
 }

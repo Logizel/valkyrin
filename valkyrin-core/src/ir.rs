@@ -34,6 +34,7 @@ pub enum RelationType {
 pub struct EntityGraph {
     pub entities: Vec<Entity>,
     pub connections: Vec<Connection>,
+    pub relations: Vec<Relation>,
 }
 
 #[derive(Debug, Clone)]
@@ -66,4 +67,28 @@ pub struct Connection {
     pub source_entity_id: String,
     pub target_entity_id: String,
     pub multiplicity: RelationType,
+}
+
+/// Represents a foreign key relationship between two entities.
+#[derive(Debug, Clone)]
+pub struct Relation {
+    pub id: String,
+    pub name: String,
+    pub source_entity_id: String,
+    pub source_field_name: String,
+    pub target_entity_id: String,
+    pub target_field_name: String,
+    pub relation_type: RelationType,
+    pub on_delete: Option<ReferentialAction>,
+    pub on_update: Option<ReferentialAction>,
+}
+
+/// Referential actions for foreign keys.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReferentialAction {
+    Cascade,
+    Restrict,
+    SetNull,
+    NoAction,
+    SetDefault,
 }

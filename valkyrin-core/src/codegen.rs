@@ -1,5 +1,5 @@
 // valkyrin-core/src/codegen.rs
-use crate::ir::{DataType, Entity, Field};
+use crate::ir::{DataType, Entity, Field, Relation, RelationType, ReferentialAction};
 use anyhow::Result;
 
 /// The universal contract for code generation.
@@ -12,6 +12,24 @@ pub trait LanguageDriver {
 
     /// Returns the file extension for this language (e.g., "go", "py", "rs").
     fn file_extension(&self) -> &'static str;
+
+    /// Generates relation code for an entity (belongs_to, has_many, etc.)
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let _ = entity;
+        let _ = relations;
+        String::new()
+    }
+
+    /// Maps a referential action to the target language syntax.
+    fn map_referential_action(&self, action: &ReferentialAction) -> String {
+        match action {
+            ReferentialAction::Cascade => "CASCADE".to_string(),
+            ReferentialAction::Restrict => "RESTRICT".to_string(),
+            ReferentialAction::SetNull => "SET NULL".to_string(),
+            ReferentialAction::NoAction => "NO ACTION".to_string(),
+            ReferentialAction::SetDefault => "SET DEFAULT".to_string(),
+        }
+    }
 }
 
 pub struct GoGormDriver;
@@ -123,6 +141,79 @@ impl LanguageDriver for GoGormDriver {
         output.push_str("}\n");
         output
     }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let (target_name, target_field) = if is_source {
+                (rel.target_entity_id.clone(), rel.target_field_name.clone())
+            } else {
+                (rel.source_entity_id.clone(), rel.source_field_name.clone())
+            };
+
+            // Find target entity name (we need to look it up from the graph)
+            let target_struct_name = capitalize_first(&target_name);
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        // Source has many targets
+                        output.push_str(&format!(
+                            "\t{} []{} `gorm:\"foreignKey:{};references:{}\"`\n",
+                            target_struct_name,
+                            target_struct_name,
+                            rel.target_field_name,
+                            rel.source_field_name
+                        ));
+                    } else {
+                        // Target belongs to source
+                        let fk_field = entity.fields.iter().find(|f| f.name == rel.source_field_name);
+                        let go_type = fk_field.map(|f| self.map_data_type(&f.data_type, f.constraints.is_nullable))
+                            .unwrap_or_else(|| "string".to_string());
+                        output.push_str(&format!(
+                            "\t{} {} `gorm:\"foreignKey:{};references:{}\"`\n",
+                            target_struct_name,
+                            go_type,
+                            rel.source_field_name,
+                            rel.target_field_name
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "\t{} {} `gorm:\"foreignKey:{};references:{}\"`\n",
+                            target_struct_name,
+                            target_struct_name,
+                            rel.target_field_name,
+                            rel.source_field_name
+                        ));
+                    } else {
+                        let fk_field = entity.fields.iter().find(|f| f.name == rel.source_field_name);
+                        let go_type = fk_field.map(|f| self.map_data_type(&f.data_type, f.constraints.is_nullable))
+                            .unwrap_or_else(|| "string".to_string());
+                        output.push_str(&format!(
+                            "\t{} {} `gorm:\"foreignKey:{};references:{}\"`\n",
+                            target_struct_name,
+                            go_type,
+                            rel.source_field_name,
+                            rel.target_field_name
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many would need a join table, skip for now
+                }
+            }
+        }
+        output
+    }
 }
 
 fn capitalize_first(s: &str) -> String {
@@ -222,6 +313,82 @@ impl LanguageDriver for PythonSqlModelDriver {
             }
         }
 
+        output
+    }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let (target_name, target_field) = if is_source {
+                (rel.target_entity_id.clone(), rel.target_field_name.clone())
+            } else {
+                (rel.source_entity_id.clone(), rel.source_field_name.clone())
+            };
+
+            let target_struct_name = capitalize_first(&target_name);
+            let fk_field_name = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+            let ref_field_name = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "    {}: list[\"{}\"] = Relationship(back_populates=\"{}\")\n",
+                            target_name.to_lowercase() + "s",
+                            target_struct_name,
+                            target_name.to_lowercase()
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "    {}: Optional[{}] = Field(default=None, foreign_key=\"{}.{}\")\n",
+                            target_name.to_lowercase(),
+                            target_struct_name,
+                            target_name.to_lowercase(),
+                            ref_field_name
+                        ));
+                        output.push_str(&format!(
+                            "    {}: Optional[{}] = Relationship(back_populates=\"{}s\")\n",
+                            target_name.to_lowercase(),
+                            target_struct_name,
+                            target_name.to_lowercase()
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "    {}: Optional[{}] = Relationship(back_populates=\"{}\", sa_relationship_kwargs={{\"uselist\": False}})\n",
+                            target_name.to_lowercase(),
+                            target_struct_name,
+                            target_name.to_lowercase()
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "    {}: Optional[{}] = Field(default=None, foreign_key=\"{}.{}\")\n",
+                            target_name.to_lowercase(),
+                            target_struct_name,
+                            target_name.to_lowercase(),
+                            ref_field_name
+                        ));
+                        output.push_str(&format!(
+                            "    {}: Optional[{}] = Relationship(back_populates=\"{}\", sa_relationship_kwargs={{\"uselist\": False}})\n",
+                            target_name.to_lowercase(),
+                            target_struct_name,
+                            target_name.to_lowercase()
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many would need a link table, skip for now
+                }
+            }
+        }
         output
     }
 }
@@ -360,6 +527,60 @@ impl LanguageDriver for GoEntDriver {
         output.push_str("}\n");
         output
     }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let target_name = if is_source { rel.target_entity_id.clone() } else { rel.source_entity_id.clone() };
+            let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+            let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
+
+            let target_struct_name = capitalize_first(&target_name);
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "\tfield.ToMany(\"{}\", \"{}\")\n",
+                            target_name.to_lowercase() + "s",
+                            target_name.to_lowercase()
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "\tfield.BelongsTo(\"{}\", field.WithFK(\"{}\"))\n",
+                            target_name.to_lowercase(),
+                            ref_field
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "\tfield.ToOne(\"{}\", field.WithFK(\"{}\"))\n",
+                            target_name.to_lowercase(),
+                            target_field
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "\tfield.BelongsTo(\"{}\", field.WithFK(\"{}\"), field.Unique())\n",
+                            target_name.to_lowercase(),
+                            ref_field
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many would need a join table
+                }
+            }
+        }
+        output
+    }
 }
 
 pub struct PythonSqlAlchemyDriver;
@@ -431,6 +652,83 @@ impl LanguageDriver for PythonSqlAlchemyDriver {
             ));
         }
 
+        output
+    }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let target_name = if is_source { rel.target_entity_id.clone() } else { rel.source_entity_id.clone() };
+            let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
+            let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+
+            let target_struct_name = target_name;
+
+            let on_delete = rel.on_delete.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "CASCADE".to_string());
+            let on_update = rel.on_update.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "CASCADE".to_string());
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "    {} = relationship(\"{}\", back_populates=\"{}\")\n",
+                            target_struct_name.to_lowercase() + "s",
+                            target_struct_name,
+                            entity.name.to_lowercase()
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "    {} = Column(ForeignKey('{}.{}', ondelete='{}', onupdate='{}'))\n",
+                            ref_field,
+                            target_struct_name.to_lowercase(),
+                            target_field,
+                            on_delete,
+                            on_update
+                        ));
+                        output.push_str(&format!(
+                            "    {} = relationship(\"{}\", back_populates=\"{}s\")\n",
+                            target_struct_name.to_lowercase(),
+                            target_struct_name,
+                            entity.name.to_lowercase()
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "    {} = relationship(\"{}\", back_populates=\"{}\", uselist=False)\n",
+                            target_struct_name.to_lowercase(),
+                            target_struct_name,
+                            entity.name.to_lowercase()
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "    {} = Column(ForeignKey('{}.{}', ondelete='{}', onupdate='{}'), unique=True)\n",
+                            ref_field,
+                            target_struct_name.to_lowercase(),
+                            target_field,
+                            on_delete,
+                            on_update
+                        ));
+                        output.push_str(&format!(
+                            "    {} = relationship(\"{}\", back_populates=\"{}\", uselist=False)\n",
+                            target_struct_name.to_lowercase(),
+                            target_struct_name,
+                            entity.name.to_lowercase()
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many would need an association table
+                }
+            }
+        }
         output
     }
 }
@@ -531,6 +829,67 @@ impl LanguageDriver for RustDieselDriver {
         output.push_str("}\n");
         output
     }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let target_name = if is_source { rel.target_entity_id.clone() } else { rel.source_entity_id.clone() };
+            let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
+            let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+
+            let target_struct_name = capitalize_first(&target_name);
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "    // Has many {}: use Queryable with filter on {}.{}\n",
+                            target_name.to_lowercase(),
+                            target_name.to_lowercase(),
+                            ref_field
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "    // Belongs to {}: {} is FK to {}.{}\n",
+                            target_name.to_lowercase(),
+                            ref_field,
+                            target_name.to_lowercase(),
+                            target_field
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "    // Has one {}: {} is FK to {}.{}\n",
+                            target_name.to_lowercase(),
+                            target_field,
+                            target_name.to_lowercase(),
+                            target_field
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "    // Belongs to {}: {} is FK to {}.{} (unique)\n",
+                            target_name.to_lowercase(),
+                            ref_field,
+                            target_name.to_lowercase(),
+                            target_field
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many would need a join table
+                }
+            }
+        }
+        output
+    }
 }
 
 pub struct RustSeaOrmDriver;
@@ -628,6 +987,69 @@ impl LanguageDriver for RustSeaOrmDriver {
         output.push_str("}\n");
         output
     }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let target_name = if is_source { rel.target_entity_id.clone() } else { rel.source_entity_id.clone() };
+            let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
+            let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+
+            let target_struct_name = capitalize_first(&target_name);
+            let on_delete = rel.on_delete.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "Cascade".to_string());
+            let on_update = rel.on_update.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "Cascade".to_string());
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "    // Has many {}: use Related to load\n",
+                            target_name.to_lowercase()
+                        ));
+                        output.push_str(&format!(
+                            "    // relation: {}.{} -> {}.{}\n",
+                            entity.name.to_lowercase(), ref_field,
+                            target_name.to_lowercase(), target_field
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "    // Belongs to {}: {} -> {}.{}\n",
+                            target_name.to_lowercase(),
+                            ref_field,
+                            target_name.to_lowercase(), target_field
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "    // Has one {}: {} -> {}.{}\n",
+                            target_name.to_lowercase(),
+                            target_field,
+                            target_name.to_lowercase(), target_field
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "    // Belongs to {}: {} -> {}.{} (unique)\n",
+                            target_name.to_lowercase(),
+                            ref_field,
+                            target_name.to_lowercase(), target_field
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many via sea_orm::Relation
+                }
+            }
+        }
+        output
+    }
 }
 
 pub struct JavaScriptSequelizeDriver;
@@ -694,6 +1116,78 @@ impl LanguageDriver for JavaScriptSequelizeDriver {
         output.push_str("  });\n");
         output.push_str(&format!("  return {};\n", entity.name));
         output.push_str("};\n");
+        output
+    }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let target_name = if is_source { rel.target_entity_id.clone() } else { rel.source_entity_id.clone() };
+            let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
+            let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+
+            let target_struct_name = target_name;
+            let on_delete = rel.on_delete.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "CASCADE".to_string());
+            let on_update = rel.on_update.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "CASCADE".to_string());
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "  {}.hasMany({}, {{ foreignKey: '{}', sourceKey: '{}', onDelete: '{}', onUpdate: '{}' }});\n",
+                            entity.name,
+                            target_struct_name,
+                            target_field,
+                            ref_field,
+                            on_delete,
+                            on_update
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "  {}.belongsTo({}, {{ foreignKey: '{}', targetKey: '{}', onDelete: '{}', onUpdate: '{}' }});\n",
+                            entity.name,
+                            target_struct_name,
+                            ref_field,
+                            target_field,
+                            on_delete,
+                            on_update
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "  {}.hasOne({}, {{ foreignKey: '{}', sourceKey: '{}', onDelete: '{}', onUpdate: '{}' }});\n",
+                            entity.name,
+                            target_struct_name,
+                            target_field,
+                            ref_field,
+                            on_delete,
+                            on_update
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "  {}.belongsTo({}, {{ foreignKey: '{}', targetKey: '{}', onDelete: '{}', onUpdate: '{}' }});\n",
+                            entity.name,
+                            target_struct_name,
+                            ref_field,
+                            target_field,
+                            on_delete,
+                            on_update
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many via belongsToMany
+                }
+            }
+        }
         output
     }
 }
@@ -807,6 +1301,76 @@ impl LanguageDriver for JavaScriptTypeOrmDriver {
         output.push_str("}\n");
         output
     }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let target_name = if is_source { rel.target_entity_id.clone() } else { rel.source_entity_id.clone() };
+            let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
+            let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+
+            let target_struct_name = target_name;
+            let on_delete = rel.on_delete.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "CASCADE".to_string());
+            let on_update = rel.on_update.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "CASCADE".to_string());
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "  @OneToMany(() => {}, {} => {}.{})\n",
+                            target_struct_name,
+                            target_struct_name.to_lowercase(),
+                            entity.name.to_lowercase(),
+                            ref_field
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "  @ManyToOne(() => {}, {} => {}.{})\n",
+                            target_struct_name,
+                            target_struct_name.to_lowercase(),
+                            target_struct_name.to_lowercase(),
+                            target_field
+                        ));
+                        output.push_str(&format!(
+                            "  @JoinColumn({{ name: '{}', referencedColumnName: '{}', onDelete: '{}', onUpdate: '{}' }})\n",
+                            ref_field, target_field, on_delete, on_update
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "  @OneToOne(() => {}, {{ nullable: true }})\n",
+                            target_struct_name
+                        ));
+                        output.push_str(&format!(
+                            "  @JoinColumn({{ name: '{}', referencedColumnName: '{}', onDelete: '{}', onUpdate: '{}' }})\n",
+                            target_field, target_field, on_delete, on_update
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "  @OneToOne(() => {}, {{ nullable: true }})\n",
+                            target_struct_name
+                        ));
+                        output.push_str(&format!(
+                            "  @JoinColumn({{ name: '{}', referencedColumnName: '{}', onDelete: '{}', onUpdate: '{}' }})\n",
+                            ref_field, target_field, on_delete, on_update
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many via @ManyToMany
+                }
+            }
+        }
+        output
+    }
 }
 
 pub struct TypeScriptPrismaDriver;
@@ -908,6 +1472,82 @@ impl LanguageDriver for TypeScriptPrismaDriver {
         }
 
         output.push_str("}\n");
+        output
+    }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let target_name = if is_source { rel.target_entity_id.clone() } else { rel.source_entity_id.clone() };
+            let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
+            let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+
+            let target_struct_name = target_name;
+            let on_delete = rel.on_delete.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "Cascade".to_string());
+            let on_update = rel.on_update.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "Cascade".to_string());
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "  {} {}[] @relation(\"{}{}\")\n",
+                            target_struct_name.to_lowercase(),
+                            target_struct_name,
+                            entity.name,
+                            target_struct_name
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "  {} {} @relation(\"{}{}\", fields: [{}], references: [{}], onDelete: {}, onUpdate: {})\n",
+                            target_struct_name.to_lowercase(),
+                            target_struct_name,
+                            entity.name,
+                            target_struct_name,
+                            ref_field,
+                            target_field,
+                            on_delete,
+                            on_update
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "  {} {} @relation(\"{}{}\", fields: [{}], references: [{}], onDelete: {}, onUpdate: {})\n",
+                            target_struct_name.to_lowercase(),
+                            target_struct_name,
+                            entity.name,
+                            target_struct_name,
+                            target_field,
+                            target_field,
+                            on_delete,
+                            on_update
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "  {} {} @relation(\"{}{}\", fields: [{}], references: [{}], onDelete: {}, onUpdate: {})\n",
+                            target_struct_name.to_lowercase(),
+                            target_struct_name,
+                            target_struct_name,
+                            entity.name,
+                            ref_field,
+                            target_field,
+                            on_delete,
+                            on_update
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many via @@relation
+                }
+            }
+        }
         output
     }
 }
@@ -1018,6 +1658,76 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
         }
 
         output.push_str("}\n");
+        output
+    }
+
+    fn generate_relations(&self, entity: &Entity, relations: &[Relation]) -> String {
+        let mut output = String::new();
+        let entity_relations: Vec<&Relation> = relations
+            .iter()
+            .filter(|r| r.source_entity_id == entity.id || r.target_entity_id == entity.id)
+            .collect();
+
+        for rel in entity_relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let target_name = if is_source { rel.target_entity_id.clone() } else { rel.source_entity_id.clone() };
+            let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
+            let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+
+            let target_struct_name = target_name;
+            let on_delete = rel.on_delete.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "CASCADE".to_string());
+            let on_update = rel.on_update.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "CASCADE".to_string());
+
+            match rel.relation_type {
+                RelationType::OneToMany => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "  @OneToMany(() => {}, {} => {}.{})\n",
+                            target_struct_name,
+                            target_struct_name.to_lowercase(),
+                            target_struct_name.to_lowercase(),
+                            ref_field
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "  @ManyToOne(() => {}, {} => {}.{})\n",
+                            target_struct_name,
+                            target_struct_name.to_lowercase(),
+                            target_struct_name.to_lowercase(),
+                            target_field
+                        ));
+                        output.push_str(&format!(
+                            "  @JoinColumn({{ name: '{}', referencedColumnName: '{}', onDelete: '{}', onUpdate: '{}' }})\n",
+                            ref_field, target_field, on_delete, on_update
+                        ));
+                    }
+                }
+                RelationType::OneToOne => {
+                    if is_source {
+                        output.push_str(&format!(
+                            "  @OneToOne(() => {}, {{ nullable: true }})\n",
+                            target_struct_name
+                        ));
+                        output.push_str(&format!(
+                            "  @JoinColumn({{ name: '{}', referencedColumnName: '{}', onDelete: '{}', onUpdate: '{}' }})\n",
+                            target_field, target_field, on_delete, on_update
+                        ));
+                    } else {
+                        output.push_str(&format!(
+                            "  @OneToOne(() => {}, {{ nullable: true }})\n",
+                            target_struct_name
+                        ));
+                        output.push_str(&format!(
+                            "  @JoinColumn({{ name: '{}', referencedColumnName: '{}', onDelete: '{}', onUpdate: '{}' }})\n",
+                            ref_field, target_field, on_delete, on_update
+                        ));
+                    }
+                }
+                RelationType::ManyToMany => {
+                    // Many-to-many via @ManyToMany
+                }
+            }
+        }
         output
     }
 }
