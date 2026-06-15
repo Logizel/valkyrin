@@ -1,6 +1,7 @@
 // valkyrin-core/src/sync.rs
 use crate::ir::{DataType, Entity, Field};
 use anyhow::{Context, Result as AnyhowResult};
+use async_trait::async_trait;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::Row;
 use std::fs;
@@ -105,9 +106,10 @@ pub enum SyncMode {
 // Introspector Trait
 // ──────────────────────────────────────────────
 
-pub trait DatabaseIntrospector {
-    fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>>;
-    fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>>;
+#[async_trait]
+pub trait DatabaseIntrospector: Send + Sync {
+    async fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>>;
+    async fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>>;
 }
 
 // ──────────────────────────────────────────────
@@ -127,22 +129,9 @@ impl PostgresIntrospector {
     }
 }
 
+#[async_trait]
 impl DatabaseIntrospector for PostgresIntrospector {
-    fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>> {
-        Err(anyhow::anyhow!(
-            "PostgreSQL introspection requires async context. Use fetch_schema_async instead."
-        ))
-    }
-
-    fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>> {
-        Err(anyhow::anyhow!(
-            "PostgreSQL relation detection requires async context."
-        ))
-    }
-}
-
-impl PostgresIntrospector {
-    pub async fn fetch_schema_async(&self) -> AnyhowResult<Vec<Entity>> {
+    async fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>> {
         let query = r#"
             SELECT
                 table_name,
@@ -245,7 +234,7 @@ impl PostgresIntrospector {
         Ok(entities)
     }
 
-    pub async fn fetch_relations_async(&self) -> AnyhowResult<Vec<DetectedRelation>> {
+    async fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>> {
         let query = r#"
             SELECT
                 tc.table_name AS source_table,
@@ -294,22 +283,9 @@ impl MysqlIntrospector {
     }
 }
 
+#[async_trait]
 impl DatabaseIntrospector for MysqlIntrospector {
-    fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>> {
-        Err(anyhow::anyhow!(
-            "MySQL introspection requires async context. Use fetch_schema_async instead."
-        ))
-    }
-
-    fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>> {
-        Err(anyhow::anyhow!(
-            "MySQL relation detection requires async context."
-        ))
-    }
-}
-
-impl MysqlIntrospector {
-    pub async fn fetch_schema_async(&self) -> AnyhowResult<Vec<Entity>> {
+    async fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>> {
         let query = r#"
             SELECT
                 TABLE_NAME,
@@ -413,7 +389,7 @@ impl MysqlIntrospector {
         Ok(entities)
     }
 
-    pub async fn fetch_relations_async(&self) -> AnyhowResult<Vec<DetectedRelation>> {
+    async fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>> {
         let query = r#"
             SELECT
                 kcu.TABLE_NAME AS source_table,
@@ -459,22 +435,9 @@ impl SqliteIntrospector {
     }
 }
 
+#[async_trait]
 impl DatabaseIntrospector for SqliteIntrospector {
-    fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>> {
-        Err(anyhow::anyhow!(
-            "SQLite introspection requires async context. Use fetch_schema_async instead."
-        ))
-    }
-
-    fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>> {
-        Err(anyhow::anyhow!(
-            "SQLite relation detection requires async context."
-        ))
-    }
-}
-
-impl SqliteIntrospector {
-    pub async fn fetch_schema_async(&self) -> AnyhowResult<Vec<Entity>> {
+    async fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>> {
         let tables_query =
             r#"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"#;
         let table_rows = sqlx::query(tables_query).fetch_all(&self.pool).await?;
@@ -483,6 +446,16 @@ impl SqliteIntrospector {
 
         for table_row in table_rows {
             let table_name: String = table_row.get("name");
+            
+            // Validate table name against identifier regex to prevent SQL injection
+            let identifier_regex = regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
+            if !identifier_regex.is_match(&table_name) {
+                return Err(anyhow::anyhow!(
+                    "Invalid table name '{}': does not match identifier pattern",
+                    table_name
+                ));
+            }
+            
             let columns_query = format!("PRAGMA table_info({});", table_name);
             let column_rows = sqlx::query(&columns_query).fetch_all(&self.pool).await?;
 
@@ -542,7 +515,7 @@ impl SqliteIntrospector {
         Ok(entities)
     }
 
-    pub async fn fetch_relations_async(&self) -> AnyhowResult<Vec<DetectedRelation>> {
+    async fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>> {
         let tables_query =
             r#"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"#;
         let table_rows = sqlx::query(tables_query).fetch_all(&self.pool).await?;
@@ -1015,20 +988,20 @@ impl SyncEngine {
         let (live_schema, detected_relations) = match db_type {
             DatabaseType::PostgreSQL => {
                 let introspector = PostgresIntrospector::new(db_url).await?;
-                let schema = introspector.fetch_schema_async().await?;
-                let relations = introspector.fetch_relations_async().await?;
+                let schema = introspector.fetch_schema().await?;
+                let relations = introspector.fetch_relations().await?;
                 (schema, relations)
             }
             DatabaseType::MySQL => {
                 let introspector = MysqlIntrospector::new(db_url).await?;
-                let schema = introspector.fetch_schema_async().await?;
-                let relations = introspector.fetch_relations_async().await?;
+                let schema = introspector.fetch_schema().await?;
+                let relations = introspector.fetch_relations().await?;
                 (schema, relations)
             }
             DatabaseType::SQLite => {
                 let introspector = SqliteIntrospector::new(db_url).await?;
-                let schema = introspector.fetch_schema_async().await?;
-                let relations = introspector.fetch_relations_async().await?;
+                let schema = introspector.fetch_schema().await?;
+                let relations = introspector.fetch_relations().await?;
                 (schema, relations)
             }
         };
