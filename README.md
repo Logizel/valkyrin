@@ -1,6 +1,6 @@
 # Valkyrin
 
-Valkyrin is a local-first, terminal-driven database schema architect and code generator. It allows you to design relational database schemas using an interactive visual canvas and automatically compiles them into type-safe, framework-specific backend code.
+Valkyrin is a local-first, terminal-driven database schema architect and code generator built using **Rust**. It allows you to design relational database schemas using an interactive visual canvas and automatically compiles them into type-safe, framework-specific backend code.
 
 Unlike traditional diagramming tools that only export static SQL text, Valkyrin functions as a developer utility that writes and maintains ORM models directly within your active local repository.
 
@@ -25,8 +25,8 @@ _Valkyrin_ operates entirely on your local machine through four fundamental CLI 
 
 ## Speciality
 
-1. Does not use any *LLM* to generate the code.
-2. Runs totally *offline and locally*.
+1. Does not use any _LLM_ to generate the code.
+2. Runs totally _offline and locally_.
 3. Multi-language and multi-ORM support (Extra languages and respective ORMs support will be added in further updates).
 
 ## Status
