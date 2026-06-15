@@ -139,7 +139,8 @@ impl DatabaseIntrospector for PostgresIntrospector {
                 column_name,
                 data_type,
                 is_nullable,
-                column_default
+                column_default,
+                udt_name
             FROM information_schema.columns
             WHERE table_schema = 'public'
             ORDER BY table_name, ordinal_position;
@@ -151,22 +152,24 @@ impl DatabaseIntrospector for PostgresIntrospector {
         let mut current_fields: Vec<Field> = Vec::new();
 
         let pk_query = r#"
-            SELECT table_name, column_name
+            SELECT table_name, column_name, ordinal_position
             FROM information_schema.table_constraints tc
             JOIN information_schema.key_column_usage kcu
               ON tc.constraint_name = kcu.constraint_name
             WHERE tc.table_schema = 'public' AND tc.constraint_type = 'PRIMARY KEY'
+            ORDER BY table_name, ordinal_position
         "#;
         let pk_rows = sqlx::query(pk_query).fetch_all(&self.pool).await?;
-        let mut primary_keys: std::collections::HashMap<String, Vec<String>> =
+        let mut primary_key_orders: std::collections::HashMap<String, Vec<(String, usize)>> =
             std::collections::HashMap::new();
         for row in pk_rows {
             let table_name: String = row.get("table_name");
             let column_name: String = row.get("column_name");
-            primary_keys
+            let ordinal_position: i32 = row.get("ordinal_position");
+            primary_key_orders
                 .entry(table_name)
                 .or_default()
-                .push(column_name);
+                .push((column_name, (ordinal_position - 1) as usize));
         }
 
         for row in rows {
@@ -175,6 +178,7 @@ impl DatabaseIntrospector for PostgresIntrospector {
             let db_type: String = row.get("data_type");
             let is_nullable_str: String = row.get("is_nullable");
             let column_default: Option<String> = row.get("column_default");
+            let udt_name: Option<String> = row.get("udt_name");
 
             if table_name != current_table_name && !current_table_name.is_empty() {
                 entities.push(Entity {
@@ -187,35 +191,50 @@ impl DatabaseIntrospector for PostgresIntrospector {
 
             current_table_name = table_name.clone();
 
-            let mapped_type = match db_type.as_str() {
-                "character varying" | "text" => DataType::String { max_length: None },
-                "integer" => DataType::Integer(crate::ir::IntSize::Standard),
-                "bigint" => DataType::Integer(crate::ir::IntSize::Big),
-                "smallint" => DataType::Integer(crate::ir::IntSize::Small),
-                "boolean" => DataType::Boolean,
-                "timestamp without time zone" | "timestamp with time zone" => DataType::DateTime,
-                "jsonb" | "json" => DataType::Json,
-                "numeric" | "decimal" => DataType::Decimal {
-                    precision: 10,
-                    scale: 2,
-                },
-                "real" | "double precision" => DataType::Float,
-                "uuid" => DataType::Uuid,
-                "bytea" => DataType::Text,
-                _ => DataType::Text,
+            let mapped_type = if db_type == "USER-DEFINED" {
+                // PostgreSQL enum – fetch enum labels using the udt_name
+                let enum_vals: Vec<String> = if let Some(type_name) = udt_name {
+                    let enum_query = r#"SELECT enumlabel FROM pg_enum WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = $1)"#;
+                    let rows = sqlx::query(enum_query)
+                        .bind(type_name)
+                        .fetch_all(&self.pool)
+                        .await?
+                        .iter()
+                        .map(|r| r.get::<String, _>("enumlabel"))
+                        .collect();
+                    rows
+                } else {
+                    vec![]
+                };
+                DataType::Enum(enum_vals)
+            } else {
+                match db_type.as_str() {
+                    "character varying" | "text" => DataType::String { max_length: None },
+                    "integer" => DataType::Integer(crate::ir::IntSize::Standard),
+                    "bigint" => DataType::Integer(crate::ir::IntSize::Big),
+                    "smallint" => DataType::Integer(crate::ir::IntSize::Small),
+                    "boolean" => DataType::Boolean,
+                    "timestamp without time zone" | "timestamp with time zone" => DataType::DateTime,
+                    "jsonb" | "json" => DataType::Json,
+                    "numeric" | "decimal" => DataType::Decimal { precision: 10, scale: 2 },
+                    "real" | "double precision" => DataType::Float,
+                    "uuid" => DataType::Uuid,
+                    "bytea" => DataType::Text,
+                    _ => DataType::Text,
+                }
             };
 
-            let is_pk = primary_keys
+            let pk_order = primary_key_orders
                 .get(&table_name)
-                .map(|pks| pks.contains(&column_name))
-                .unwrap_or(false);
+                .and_then(|vec| vec.iter().find(|(col, _)| col == &column_name).map(|(_, ord)| *ord));
 
             current_fields.push(Field {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: column_name,
                 data_type: mapped_type,
                 constraints: crate::ir::Constraints {
-                    is_primary_key: is_pk,
+                    is_primary_key: pk_order.is_some(),
+                    primary_key_order: pk_order,
                     is_unique: false,
                     is_nullable: is_nullable_str == "YES",
                     is_indexed: false,
@@ -305,20 +324,22 @@ impl DatabaseIntrospector for MysqlIntrospector {
         let mut current_fields: Vec<Field> = Vec::new();
 
         let pk_query = r#"
-            SELECT TABLE_NAME, COLUMN_NAME
+            SELECT TABLE_NAME, COLUMN_NAME, ORDINAL_POSITION
             FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
             WHERE TABLE_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'PRIMARY'
+            ORDER BY TABLE_NAME, ORDINAL_POSITION
         "#;
         let pk_rows = sqlx::query(pk_query).fetch_all(&self.pool).await?;
-        let mut primary_keys: std::collections::HashMap<String, Vec<String>> =
+        let mut primary_key_orders: std::collections::HashMap<String, Vec<(String, usize)>> =
             std::collections::HashMap::new();
         for row in pk_rows {
             let table_name: String = row.get("TABLE_NAME");
             let column_name: String = row.get("COLUMN_NAME");
-            primary_keys
+            let ordinal_position: i32 = row.get("ORDINAL_POSITION");
+            primary_key_orders
                 .entry(table_name)
                 .or_default()
-                .push(column_name);
+                .push((column_name, (ordinal_position - 1) as usize));
         }
 
         for row in rows {
@@ -339,38 +360,50 @@ impl DatabaseIntrospector for MysqlIntrospector {
 
             current_table_name = table_name.clone();
 
-            let mapped_type = match column_type.as_str() {
-                s if s.starts_with("varchar") || s.starts_with("char") => {
-                    DataType::String { max_length: None }
+            let mapped_type = if column_type.starts_with("enum") {
+                // MySQL ENUM – extract enum values from column_type like "enum('a','b')"
+                let vals_str = column_type
+                    .trim_start_matches("enum(")
+                    .trim_end_matches(')');
+                let enum_vals: Vec<String> = vals_str
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('\'').to_string())
+                    .collect();
+                DataType::Enum(enum_vals)
+            } else {
+                match column_type.as_str() {
+                    s if s.starts_with("varchar") || s.starts_with("char") => {
+                        DataType::String { max_length: None }
+                    }
+                    "text" | "longtext" | "mediumtext" | "tinytext" => DataType::Text,
+                    "tinyint" | "smallint" | "int" | "integer" | "mediumint" => {
+                        DataType::Integer(crate::ir::IntSize::Standard)
+                    }
+                    "bigint" => DataType::Integer(crate::ir::IntSize::Big),
+                    "float" | "double" | "real" => DataType::Float,
+                    "decimal" | "numeric" => DataType::Decimal {
+                        precision: 10,
+                        scale: 2,
+                    },
+                    "boolean" | "bool" => DataType::Boolean,
+                    "timestamp" | "datetime" | "date" | "time" => DataType::DateTime,
+                    "json" => DataType::Json,
+                    "uuid" => DataType::Uuid,
+                    _ => DataType::Text,
                 }
-                "text" | "longtext" | "mediumtext" | "tinytext" => DataType::Text,
-                "tinyint" | "smallint" | "int" | "integer" | "mediumint" => {
-                    DataType::Integer(crate::ir::IntSize::Standard)
-                }
-                "bigint" => DataType::Integer(crate::ir::IntSize::Big),
-                "float" | "double" | "real" => DataType::Float,
-                "decimal" | "numeric" => DataType::Decimal {
-                    precision: 10,
-                    scale: 2,
-                },
-                "boolean" | "bool" => DataType::Boolean,
-                "timestamp" | "datetime" | "date" | "time" => DataType::DateTime,
-                "json" => DataType::Json,
-                "uuid" => DataType::Uuid,
-                _ => DataType::Text,
             };
 
-            let is_pk = primary_keys
+            let pk_order = primary_key_orders
                 .get(&table_name)
-                .map(|pks| pks.contains(&column_name))
-                .unwrap_or(false);
+                .and_then(|vec| vec.iter().find(|(col, _)| col == &column_name).map(|(_, ord)| *ord));
 
             current_fields.push(Field {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: column_name,
                 data_type: mapped_type,
                 constraints: crate::ir::Constraints {
-                    is_primary_key: is_pk,
+                    is_primary_key: pk_order.is_some(),
+                    primary_key_order: pk_order,
                     is_unique: false,
                     is_nullable: is_nullable_str == "YES",
                     is_indexed: false,
@@ -492,12 +525,15 @@ impl DatabaseIntrospector for SqliteIntrospector {
                     _ => DataType::Text,
                 };
 
+                let pk_order = if pk_info > 0 { Some((pk_info - 1) as usize) } else { None };
+
                 fields.push(Field {
                     id: uuid::Uuid::new_v4().to_string(),
                     name: column_name,
                     data_type: mapped_type,
                     constraints: crate::ir::Constraints {
-                        is_primary_key: pk_info > 0,
+                        is_primary_key: pk_order.is_some(),
+                        primary_key_order: pk_order,
                         is_unique: false,
                         is_nullable: is_nullable == 0,
                         is_indexed: false,
@@ -645,6 +681,14 @@ impl SyncEngine {
                             name: live_field.name.clone(),
                             before: local_field.constraints.default_value.clone(),
                             after: live_field.constraints.default_value.clone(),
+                        });
+                    }
+                    // Compare primary key order
+                    if local_field.constraints.primary_key_order != live_field.constraints.primary_key_order {
+                        changes.push(ColumnChange::TypeChanged {
+                            name: live_field.name.clone(),
+                            from: DataType::String { max_length: None }, // placeholder for PK order change
+                            to: DataType::String { max_length: None },
                         });
                     }
                 }

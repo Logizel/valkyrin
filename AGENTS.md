@@ -89,10 +89,10 @@ All 6 master plan phases are **complete**:
 
 _VERY IMPORTANT_
 
-## The main thing about valkyrin is that it is supposed to not include ai and should be local and should run without any internet
+## The main thing about Valkyrin is that it is supposed to not include AI and should be local and should run without any internet
 
-## Dont add bloated features
+## Don't add bloated features
 
 ## Keep everything production grade
 
-## Commit the code after every successfull change
+## Commit the code after every successful change

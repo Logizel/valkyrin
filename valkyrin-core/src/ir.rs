@@ -54,6 +54,7 @@ pub struct Field {
 #[derive(Debug, Clone)]
 pub struct Constraints {
     pub is_primary_key: bool,
+    pub primary_key_order: Option<usize>,
     pub is_unique: bool,
     pub is_nullable: bool,
     pub is_indexed: bool,

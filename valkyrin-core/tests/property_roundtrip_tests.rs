@@ -47,6 +47,7 @@ fn arb_constraints() -> impl Strategy<Value = Constraints> {
     )
         .prop_map(|(pk, unique, nullable, indexed, default)| Constraints {
             is_primary_key: pk,
+            primary_key_order: if pk { Some(0) } else { None },
             is_unique: unique,
             is_nullable: nullable,
             is_indexed: indexed,

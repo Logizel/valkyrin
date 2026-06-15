@@ -92,6 +92,13 @@ impl LanguageDriver for GoGormDriver {
 
         output.push_str(&format!("type {} struct {{\n", entity.name));
 
+        let pk_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .collect();
+        let _has_composite_pk = pk_fields.len() > 1;
+
         for field in &entity.fields {
             let go_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
 
@@ -99,7 +106,7 @@ impl LanguageDriver for GoGormDriver {
             if field.constraints.is_primary_key {
                 gorm_tags.push("primaryKey".to_string());
             }
-            if field.constraints.is_unique {
+            if field.constraints.is_unique && !field.constraints.is_primary_key {
                 gorm_tags.push("unique".to_string());
             }
 
@@ -179,6 +186,13 @@ impl LanguageDriver for PythonSqlModelDriver {
         }
 
         output.push_str(&format!("class {}(SQLModel, table=True):\n", entity.name));
+
+        let pk_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .collect();
+        let _has_composite_pk = pk_fields.len() > 1;
 
         for field in &entity.fields {
             let py_type = if let DataType::Enum(_) = &field.data_type {
@@ -284,6 +298,13 @@ impl LanguageDriver for GoEntDriver {
         output.push_str("\tent.Schema\n");
         output.push_str("}\n\n");
 
+        let pk_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .collect();
+        let has_composite_pk = pk_fields.len() > 1;
+
         output.push_str(&format!("func ({}) Fields() []ent.Field {{\n", entity.name));
         output.push_str("\treturn []ent.Field{\n");
 
@@ -312,11 +333,15 @@ impl LanguageDriver for GoEntDriver {
             if field.constraints.is_nullable {
                 output.push_str("\t\t\tNillable().\n");
             }
-            if field.constraints.is_unique {
+            if field.constraints.is_unique && !field.constraints.is_primary_key {
                 output.push_str("\t\t\tUnique().\n");
             }
             if field.constraints.is_primary_key {
-                output.push_str("\t\t\tDefault(uuid.New).\n");
+                if has_composite_pk {
+                    output.push_str("\t\t\tImmutable().\n");
+                } else {
+                    output.push_str("\t\t\tDefault(uuid.New).\n");
+                }
             }
             if matches!(field.data_type, DataType::Decimal { .. }) {
                 output.push_str("\t\t\tSchemaType(map[string]string{\n");
@@ -382,6 +407,13 @@ impl LanguageDriver for PythonSqlAlchemyDriver {
         output.push_str(&format!("class {}(Base):\n", entity.name));
         output.push_str(&format!("    __tablename__ = '{}'\n\n", entity.name.to_lowercase()));
 
+        let pk_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .collect();
+        let _has_composite_pk = pk_fields.len() > 1;
+
         for field in &entity.fields {
             let col_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
 
@@ -389,7 +421,7 @@ impl LanguageDriver for PythonSqlAlchemyDriver {
             if field.constraints.is_primary_key {
                 constraints.push_str(", primary_key=True");
             }
-            if field.constraints.is_unique {
+            if field.constraints.is_unique && !field.constraints.is_primary_key {
                 constraints.push_str(", unique=True");
             }
 
@@ -572,10 +604,17 @@ impl LanguageDriver for RustSeaOrmDriver {
                 self.map_data_type(&field.data_type, field.constraints.is_nullable)
             };
 
+        let pk_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .collect();
+        let _has_composite_pk = pk_fields.len() > 1;
+
             let mut attributes = String::new();
             if field.constraints.is_primary_key {
                 attributes.push_str("primary_key");
-            } else if field.constraints.is_unique {
+            } else if field.constraints.is_unique && !field.constraints.is_primary_key {
                 attributes.push_str("unique");
             }
 
@@ -626,6 +665,13 @@ impl LanguageDriver for JavaScriptSequelizeDriver {
         output.push_str("module.exports = (sequelize, DataTypes) => {\n");
         output.push_str(&format!("  const {} = sequelize.define('{}', {{\n", entity.name, entity.name));
 
+        let pk_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .collect();
+        let _has_composite_pk = pk_fields.len() > 1;
+
         for field in &entity.fields {
             let base_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
 
@@ -633,7 +679,7 @@ impl LanguageDriver for JavaScriptSequelizeDriver {
             if field.constraints.is_primary_key {
                 field_config.push_str(", primaryKey: true");
             }
-            if field.constraints.is_unique {
+            if field.constraints.is_unique && !field.constraints.is_primary_key {
                 field_config.push_str(", unique: true");
             }
             if field.constraints.is_nullable {
@@ -682,14 +728,30 @@ impl LanguageDriver for JavaScriptTypeOrmDriver {
     fn generate_model(&self, entity: &Entity) -> String {
         let mut output = String::new();
 
-        output.push_str("import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';\n\n");
+        let pk_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .collect();
+        let has_composite_pk = pk_fields.len() > 1;
+
+        let import = if has_composite_pk {
+            "import { Entity, PrimaryColumn, Column } from 'typeorm';\n\n"
+        } else {
+            "import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';\n\n"
+        };
+        output.push_str(import);
 
         output.push_str(&format!("@Entity('{}')\n", entity.name.to_lowercase()));
         output.push_str(&format!("export class {} {{\n", entity.name));
 
         for field in &entity.fields {
             if field.constraints.is_primary_key {
-                output.push_str("  @PrimaryGeneratedColumn('uuid')\n");
+                if has_composite_pk {
+                    output.push_str("  @PrimaryColumn()\n");
+                } else {
+                    output.push_str("  @PrimaryGeneratedColumn('uuid')\n");
+                }
                 output.push_str(&format!("  {}: string;\n\n", field.name));
             } else {
                 let col_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
@@ -801,8 +863,15 @@ impl LanguageDriver for TypeScriptPrismaDriver {
 
         output.push_str(&format!("model {} {{\n", entity.name));
 
+        let pk_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .collect();
+        let has_composite_pk = pk_fields.len() > 1;
+
         for field in &entity.fields {
-            let prisma_type = if field.constraints.is_primary_key && matches!(field.data_type, DataType::Uuid) {
+            let prisma_type = if field.constraints.is_primary_key && matches!(field.data_type, DataType::Uuid) && !has_composite_pk {
                 "String @id @default(uuid())".to_string()
             } else if let DataType::Enum(_) = &field.data_type {
                 let enum_name = format!("{}", capitalize_first(&field.name));
@@ -822,7 +891,7 @@ impl LanguageDriver for TypeScriptPrismaDriver {
 
             output.push_str(&format!("  {} {}", field.name, prisma_type));
 
-            if field.constraints.is_primary_key && !matches!(field.data_type, DataType::Uuid) {
+            if field.constraints.is_primary_key && !matches!(field.data_type, DataType::Uuid) && !has_composite_pk {
                 output.push_str(" @id");
             }
             if field.constraints.is_unique && !field.constraints.is_primary_key {
@@ -830,6 +899,12 @@ impl LanguageDriver for TypeScriptPrismaDriver {
             }
 
             output.push_str("\n");
+        }
+
+        // Composite primary key
+        if has_composite_pk {
+            let pk_names: Vec<String> = pk_fields.iter().map(|f| f.name.clone()).collect();
+            output.push_str(&format!("  @@id([{}])\n", pk_names.join(", ")));
         }
 
         output.push_str("}\n");
@@ -867,14 +942,30 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
     fn generate_model(&self, entity: &Entity) -> String {
         let mut output = String::new();
 
-        output.push_str("import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';\n\n");
+        let pk_fields: Vec<&Field> = entity
+            .fields
+            .iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .collect();
+        let has_composite_pk = pk_fields.len() > 1;
+
+        let import = if has_composite_pk {
+            "import { Entity, PrimaryColumn, Column } from 'typeorm';\n\n"
+        } else {
+            "import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';\n\n"
+        };
+        output.push_str(import);
 
         output.push_str(&format!("@Entity('{}')\n", entity.name.to_lowercase()));
         output.push_str(&format!("export class {} {{\n", entity.name));
 
         for field in &entity.fields {
             if field.constraints.is_primary_key {
-                output.push_str("  @PrimaryGeneratedColumn('uuid')\n");
+                if has_composite_pk {
+                    output.push_str("  @PrimaryColumn()\n");
+                } else {
+                    output.push_str("  @PrimaryGeneratedColumn('uuid')\n");
+                }
                 output.push_str(&format!("  {}: string;\n\n", field.name));
             } else {
                 let col_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);

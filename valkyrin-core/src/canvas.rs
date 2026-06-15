@@ -89,6 +89,7 @@ impl CanvasPayload {
                     data_type,
                     constraints: Constraints {
                         is_primary_key: col.is_primary,
+                        primary_key_order: if col.is_primary { Some(0) } else { None },
                         is_nullable: col.is_nullable,
                         is_unique: col.is_unique,
                         is_indexed: col.is_indexed,

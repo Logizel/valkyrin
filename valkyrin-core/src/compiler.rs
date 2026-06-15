@@ -180,6 +180,7 @@ pub fn compile_blueprint() -> Result<()> {
                     data_type: source_pk_data_type,
                     constraints: crate::ir::Constraints {
                         is_primary_key: false,
+                        primary_key_order: None,
                         is_unique: false,
                         is_nullable: true,
                         is_indexed: false,
