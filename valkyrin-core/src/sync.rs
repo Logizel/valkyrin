@@ -1119,7 +1119,7 @@ impl SyncEngine {
                         DataType::DateTime => "datetime",
                         DataType::Json => "json",
                         DataType::Uuid => "uuid",
-                        DataType::Enum(_) => "string",
+                        DataType::Enum(_) => "enum",
                     };
 
                     canvas_columns.push(crate::canvas::CanvasColumn {
@@ -1131,6 +1131,22 @@ impl SyncEngine {
                         is_unique: field.constraints.is_unique,
                         is_indexed: field.constraints.is_indexed,
                         default_value: field.constraints.default_value.clone(),
+                        enum_values: match &field.data_type {
+                            DataType::Enum(values) => Some(values.clone()),
+                            _ => None,
+                        },
+                        precision: match &field.data_type {
+                            DataType::Decimal { precision, .. } => Some(*precision),
+                            _ => None,
+                        },
+                        scale: match &field.data_type {
+                            DataType::Decimal { scale, .. } => Some(*scale),
+                            _ => None,
+                        },
+                        max_length: match &field.data_type {
+                            DataType::String { max_length } => *max_length,
+                            _ => None,
+                        },
                     });
                 }
 

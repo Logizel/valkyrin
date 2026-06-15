@@ -30,6 +30,14 @@ pub struct CanvasColumn {
     pub is_unique: bool,
     pub is_indexed: bool,
     pub default_value: Option<String>,
+    #[serde(default)]
+    pub enum_values: Option<Vec<String>>, // For enum type
+    #[serde(default)]
+    pub precision: Option<u8>, // For decimal type
+    #[serde(default)]
+    pub scale: Option<u8>, // For decimal type
+    #[serde(default)]
+    pub max_length: Option<u32>, // For string type (optional, unlimited if None)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -44,8 +52,6 @@ use crate::ir::{
     Connection, Constraints, DataType, Entity, EntityGraph, Field, IntSize, RelationType,
 };
 
-// ... (Keep your struct definitions exactly as they are)
-
 impl CanvasPayload {
     pub fn to_ir(&self) -> EntityGraph {
         let mut entities = Vec::new();
@@ -55,23 +61,25 @@ impl CanvasPayload {
 
             for col in &table.columns {
                 let data_type = match col.raw_type.as_str() {
-                    "string" => DataType::String { max_length: None },
+                    "string" => DataType::String {
+                        max_length: col.max_length,
+                    },
                     "text" => DataType::Text,
                     "int" | "integer" => DataType::Integer(IntSize::Standard),
                     "bigint" => DataType::Integer(IntSize::Big),
                     "smallint" | "int16" => DataType::Integer(IntSize::Small),
                     "float" => DataType::Float,
                     "decimal" => {
-                        // Default to (10, 2) if not specified; ideally parsed from raw_type
                         DataType::Decimal {
-                            precision: 10,
-                            scale: 2,
+                            precision: col.precision.unwrap_or(10),
+                            scale: col.scale.unwrap_or(2),
                         }
                     }
                     "boolean" | "bool" => DataType::Boolean,
                     "datetime" | "timestamp" => DataType::DateTime,
                     "json" | "jsonb" => DataType::Json,
                     "uuid" => DataType::Uuid,
+                    "enum" => DataType::Enum(col.enum_values.clone().unwrap_or_default()),
                     _ => DataType::Text, // Safe fallback
                 };
 
@@ -96,7 +104,7 @@ impl CanvasPayload {
             });
         }
 
-        // NEW: Parse the relationships from the canvas
+        // Parse the relationships from the canvas
         let mut connections = Vec::new();
         for rel in &self.relations {
             let multiplicity = match rel.relation_type.as_str() {

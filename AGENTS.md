@@ -86,3 +86,5 @@ All 6 master plan phases are **complete**:
 6. **Sync command** now requires `SyncMode` enum (not just url and db_type).
 7. **config.rs** validates supported language/ORM combinations with `ensure!`.
 8. **compiler.rs** auto-disambiguates duplicate table names and sanitizes filenames.
+
+You need to push the code to GitHub every time you finish testing the new feature that is added.
