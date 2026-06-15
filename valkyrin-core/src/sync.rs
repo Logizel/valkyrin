@@ -1123,8 +1123,19 @@ impl SyncEngine {
                     });
                 }
 
+                // UUID collision check: ensure new_table.id doesn't exist in canvas
+                let mut table_id = new_table.id.clone();
+                let existing_ids: std::collections::HashSet<String> = payload.tables.iter().map(|t| t.id.clone()).collect();
+                if existing_ids.contains(&table_id) {
+                    // Generate one new UUID
+                    table_id = uuid::Uuid::new_v4().to_string();
+                    if existing_ids.contains(&table_id) {
+                        panic!("UUID collision detected twice - this should be statistically impossible");
+                    }
+                }
+
                 payload.tables.push(crate::canvas::CanvasTable {
-                    id: new_table.id.clone(),
+                    id: table_id,
                     name: new_table.name.clone(),
                     columns: canvas_columns,
                     position: crate::canvas::NodePosition {
