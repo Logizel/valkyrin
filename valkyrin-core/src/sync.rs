@@ -1496,7 +1496,7 @@ impl SyncEngine {
         let canvas_ir = payload.to_ir();
 
         // Compute diff from canvas to DB (swap arguments)
-        let mut diff = Self::calculate_detailed_diff(&canvas_ir.entities, &live_schema);
+        let diff = Self::calculate_detailed_diff(&canvas_ir.entities, &live_schema);
 
         // Generate migration statements (forward direction: DB -> canvas)
         // For push we need opposite: apply canvas => DB changes.
