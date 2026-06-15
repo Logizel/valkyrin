@@ -100,7 +100,7 @@ impl LanguageDriver for GoGormDriver {
                     output.push_str(&format!("type {} string\n\n", const_name));
                     output.push_str("const (\n");
                     for val in values {
-                        let const_val = format!("{}{}", const_name, capitalize_first(&val));
+                        let const_val = format!("{}{}", const_name, capitalize_first(val));
                         output.push_str(&format!("\t{} {} = \"{}\"\n", const_val, const_name, val));
                     }
                     output.push_str(")\n\n");
@@ -151,7 +151,7 @@ impl LanguageDriver for GoGormDriver {
 
         for rel in entity_relations {
             let is_source = rel.source_entity_id == entity.id;
-            let (target_name, target_field) = if is_source {
+            let (target_name, _target_field) = if is_source {
                 (rel.target_entity_id.clone(), rel.target_field_name.clone())
             } else {
                 (rel.source_entity_id.clone(), rel.source_field_name.clone())
@@ -272,7 +272,7 @@ impl LanguageDriver for PythonSqlModelDriver {
                     let const_name = val.to_uppercase();
                     output.push_str(&format!("    {} = \"{}\"\n", const_name, val));
                 }
-                output.push_str("\n");
+                output.push('\n');
             }
         }
 
@@ -325,14 +325,14 @@ impl LanguageDriver for PythonSqlModelDriver {
 
         for rel in entity_relations {
             let is_source = rel.source_entity_id == entity.id;
-            let (target_name, target_field) = if is_source {
+            let (target_name, _target_field) = if is_source {
                 (rel.target_entity_id.clone(), rel.target_field_name.clone())
             } else {
                 (rel.source_entity_id.clone(), rel.source_field_name.clone())
             };
 
             let target_struct_name = capitalize_first(&target_name);
-            let fk_field_name = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
+            let _fk_field_name = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
             let ref_field_name = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
 
             match rel.relation_type {
@@ -453,7 +453,7 @@ impl LanguageDriver for GoEntDriver {
                     output.push_str(&format!("type {} string\n\n", const_name));
                     output.push_str("const (\n");
                     for val in values {
-                        let const_val = format!("{}{}", const_name, capitalize_first(&val));
+                        let const_val = format!("{}{}", const_name, capitalize_first(val));
                         output.push_str(&format!("\t{} {} = \"{}\"\n", const_val, const_name, val));
                     }
                     output.push_str(")\n\n");
@@ -541,7 +541,7 @@ impl LanguageDriver for GoEntDriver {
             let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
             let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
 
-            let target_struct_name = capitalize_first(&target_name);
+            let _target_struct_name = capitalize_first(&target_name);
 
             match rel.relation_type {
                 RelationType::OneToMany => {
@@ -770,11 +770,11 @@ impl LanguageDriver for RustDieselDriver {
         for field in &enum_fields {
             if let DataType::Enum(values) = &field.data_type {
                 let enum_name = format!("{}Enum", capitalize_first(&field.name));
-                output.push_str(&format!("#[derive(Debug, Clone, Copy, PartialEq, Eq, diesel::deserialize::FromSqlRow, diesel::serialize::ToSql)]\n"));
-                output.push_str(&format!("#[diesel(sql_type = Text)]\n"));
+                output.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, diesel::deserialize::FromSqlRow, diesel::serialize::ToSql)]\n");
+                output.push_str("#[diesel(sql_type = Text)]\n");
                 output.push_str(&format!("pub enum {} {{\n", enum_name));
                 for val in values {
-                    let variant = capitalize_first(&val);
+                    let variant = capitalize_first(val);
                     output.push_str(&format!("    {},\n", variant));
                 }
                 output.push_str("}\n\n");
@@ -783,7 +783,7 @@ impl LanguageDriver for RustDieselDriver {
                 output.push_str("    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {\n");
                 output.push_str("        let s = match self {\n");
                 for val in values {
-                    let variant = capitalize_first(&val);
+                    let variant = capitalize_first(val);
                     output.push_str(&format!("            {}::{} => \"{}\",\n", enum_name, variant, val));
                 }
                 output.push_str("        };\n");
@@ -797,7 +797,7 @@ impl LanguageDriver for RustDieselDriver {
                 output.push_str("        let s = std::str::from_utf8(bytes.as_bytes())?;\n");
                 output.push_str("        match s {\n");
                 for val in values {
-                    let variant = capitalize_first(&val);
+                    let variant = capitalize_first(val);
                     output.push_str(&format!("            \"{}\" => Ok({}::{}),\n", val, enum_name, variant));
                 }
                 output.push_str("            _ => Err(format!(\"Invalid variant for {}: {}\", stringify!({}), s).into()),\n");
@@ -807,7 +807,7 @@ impl LanguageDriver for RustDieselDriver {
             }
         }
 
-        output.push_str(&format!("#[derive(Queryable, Insertable, Selectable, Serialize, Deserialize, Debug, Clone)]\n"));
+        output.push_str("#[derive(Queryable, Insertable, Selectable, Serialize, Deserialize, Debug, Clone)]\n");
         output.push_str(&format!("#[diesel(table_name = {})]\n", entity.name.to_lowercase()));
         output.push_str(&format!("pub struct {} {{\n", entity.name));
 
@@ -843,7 +843,7 @@ impl LanguageDriver for RustDieselDriver {
             let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
             let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
 
-            let target_struct_name = capitalize_first(&target_name);
+            let _target_struct_name = capitalize_first(&target_name);
 
             match rel.relation_type {
                 RelationType::OneToMany => {
@@ -935,11 +935,11 @@ impl LanguageDriver for RustSeaOrmDriver {
         for field in &enum_fields {
             if let DataType::Enum(values) = &field.data_type {
                 let enum_name = format!("{}Enum", capitalize_first(&field.name));
-                output.push_str(&format!("#[derive(Debug, Clone, PartialEq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]\n"));
+                output.push_str("#[derive(Debug, Clone, PartialEq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]\n");
                 output.push_str(&format!("#[sea_orm(rs_type = \"String\", db_type = \"Enum\", enum_name = \"{}\")]\n", field.name));
                 output.push_str(&format!("pub enum {} {{\n", enum_name));
                 for val in values {
-                    let variant = capitalize_first(&val);
+                    let variant = capitalize_first(val);
                     output.push_str(&format!("    #[sea_orm(string_value = \"{}\")]\n", val));
                     output.push_str(&format!("    {},\n", variant));
                 }
@@ -947,9 +947,9 @@ impl LanguageDriver for RustSeaOrmDriver {
             }
         }
 
-        output.push_str(&format!("#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Serialize, Deserialize)]\n"));
+        output.push_str("#[derive(Clone, Debug, PartialEq, DeriveModel, DeriveActiveModel, Serialize, Deserialize)]\n");
         output.push_str(&format!("#[sea_orm(table_name = \"{}\")]\n", entity.name.to_lowercase()));
-        output.push_str(&format!("pub struct Model {{\n"));
+        output.push_str("pub struct Model {\n");
 
         for field in &entity.fields {
             let sea_type = if let DataType::Enum(_) = &field.data_type {
@@ -1001,9 +1001,9 @@ impl LanguageDriver for RustSeaOrmDriver {
             let ref_field = if is_source { rel.source_field_name.clone() } else { rel.target_field_name.clone() };
             let target_field = if is_source { rel.target_field_name.clone() } else { rel.source_field_name.clone() };
 
-            let target_struct_name = capitalize_first(&target_name);
-            let on_delete = rel.on_delete.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "Cascade".to_string());
-            let on_update = rel.on_update.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "Cascade".to_string());
+            let _target_struct_name = capitalize_first(&target_name);
+            let _on_delete = rel.on_delete.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "Cascade".to_string());
+            let _on_update = rel.on_update.as_ref().map(|a| self.map_referential_action(a)).unwrap_or_else(|| "Cascade".to_string());
 
             match rel.relation_type {
                 RelationType::OneToMany => {
@@ -1390,10 +1390,9 @@ impl LanguageDriver for TypeScriptPrismaDriver {
             DataType::Json => "Json".to_string(),
             DataType::Uuid => "String @id @default(uuid())".to_string(),
             DataType::Enum(values) => {
-                let enum_name = capitalize_first(
+                capitalize_first(
                     values.first().map(|v| v.as_str()).unwrap_or("Status")
-                );
-                format!("{}", enum_name)
+                )
             },
         }
     }
@@ -1414,7 +1413,7 @@ impl LanguageDriver for TypeScriptPrismaDriver {
         if !enum_fields.is_empty() {
             for field in &enum_fields {
                 if let DataType::Enum(values) = &field.data_type {
-                    let enum_name = format!("{}", capitalize_first(&field.name));
+                    let enum_name = capitalize_first(&field.name);
                     output.push_str(&format!("enum {} {{\n", enum_name));
                     for val in values {
                         let variant = val.to_uppercase();
@@ -1438,7 +1437,7 @@ impl LanguageDriver for TypeScriptPrismaDriver {
             let prisma_type = if field.constraints.is_primary_key && matches!(field.data_type, DataType::Uuid) && !has_composite_pk {
                 "String @id @default(uuid())".to_string()
             } else if let DataType::Enum(_) = &field.data_type {
-                let enum_name = format!("{}", capitalize_first(&field.name));
+                let enum_name = capitalize_first(&field.name).to_string();
                 if field.constraints.is_nullable {
                     format!("{}?", enum_name)
                 } else {
@@ -1462,7 +1461,7 @@ impl LanguageDriver for TypeScriptPrismaDriver {
                 output.push_str(" @unique");
             }
 
-            output.push_str("\n");
+            output.push('\n');
         }
 
         // Composite primary key

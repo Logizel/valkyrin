@@ -195,14 +195,14 @@ impl DatabaseIntrospector for PostgresIntrospector {
                 // PostgreSQL enum – fetch enum labels using the udt_name
                 let enum_vals: Vec<String> = if let Some(type_name) = udt_name {
                     let enum_query = r#"SELECT enumlabel FROM pg_enum WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = $1)"#;
-                    let rows = sqlx::query(enum_query)
+                    
+                    sqlx::query(enum_query)
                         .bind(type_name)
                         .fetch_all(&self.pool)
                         .await?
                         .iter()
                         .map(|r| r.get::<String, _>("enumlabel"))
-                        .collect();
-                    rows
+                        .collect()
                 } else {
                     vec![]
                 };
@@ -478,11 +478,12 @@ impl DatabaseIntrospector for SqliteIntrospector {
 
         let mut entities: Vec<Entity> = Vec::new();
 
+        // Validate table name against identifier regex to prevent SQL injection
+        let identifier_regex = regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
+
         for table_row in table_rows {
             let table_name: String = table_row.get("name");
             
-            // Validate table name against identifier regex to prevent SQL injection
-            let identifier_regex = regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
             if !identifier_regex.is_match(&table_name) {
                 return Err(anyhow::anyhow!(
                     "Invalid table name '{}': does not match identifier pattern",

@@ -127,7 +127,7 @@ impl CodeMerger {
             self.comment_prefix
         ));
         final_file.push_str(&separator);
-        final_file.push_str("\n");
+        final_file.push('\n');
 
         if let Some(custom_code) = extracted_custom_code {
             final_file.push_str(&custom_code);

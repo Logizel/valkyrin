@@ -215,21 +215,17 @@ pub fn compile_blueprint() -> Result<()> {
     }
 
     // Diff-and-prune: Delete orphaned files
-    let managed_extensions = vec!["go", "py", "rs", "ts", "js", "prisma"];
+    let managed_extensions = ["go", "py", "rs", "ts", "js", "prisma"];
     if let Ok(entries) = fs::read_dir(output_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if managed_extensions.contains(&ext) {
-                        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                            if !generated_entity_names.contains(stem) {
+            if path.is_file()
+                && let Some(ext) = path.extension().and_then(|e| e.to_str())
+                    && managed_extensions.contains(&ext)
+                        && let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+                            && !generated_entity_names.contains(stem) {
                                 fs::remove_file(&path)?;
                             }
-                        }
-                    }
-                }
-            }
         }
     }
 
