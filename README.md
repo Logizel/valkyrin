@@ -27,6 +27,20 @@ _Valkyrin_ operates entirely on your local machine through four fundamental CLI 
 7. `valkyrin check`: Performs a dry‑run diff between the canvas and a live database, reporting mismatches without modifying anything.
 8. `valkyrin rollback`: Reverts the most recent migration(s) by executing the generated **DOWN** SQL. Use `--steps <N>` to specify how many migrations to roll back and `--dry‑run` to preview.
 
+## Composite Primary Keys
+
+Valkyrin supports composite primary keys. In the canvas, mark multiple columns as primary and set their order (1, 2, …). The generated migration and ORM code will emit the correct composite primary key syntax for each target:
+
+- **PostgreSQL / MySQL / SQLite:** `PRIMARY KEY (col1, col2, ...)`
+- **Go (GORM):** multiple `primaryKey` tags
+- **Go (Ent):** `Fields` with `PrimaryKey` and `Order`
+- **Rust (Diesel):** `#[primary_key(col1, col2)]`
+- **Rust (SeaORM):** `PrimaryKey` derive with multiple fields
+- **TypeScript (Prisma):** `@@id([col1, col2])`
+- **TypeScript (TypeORM):** `@PrimaryColumn` on each field
+- **JavaScript (Sequelize / TypeORM):** composite primary key configuration
+- **Python (SQLAlchemy / SQLModel):** `PrimaryKeyConstraint` or multiple `primary_key=True`
+
 ## Speciality
 
 1. Does not use any _LLM_ to generate the code.

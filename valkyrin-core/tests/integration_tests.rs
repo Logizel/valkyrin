@@ -12,8 +12,7 @@ async fn integration_migration_execution() {
         std::env::var("TEST_MYSQL_URL").ok(),
     ];
 
-    for maybe_url in db_urls {
-        if let Some(url) = maybe_url {
+    for url in db_urls.into_iter().flatten() {
             // Determine the DB type from the URL.
             let db_type = DatabaseType::from_url(&url).expect("Unsupported database URL");
 
@@ -59,6 +58,5 @@ async fn integration_migration_execution() {
                 &["DROP TABLE integration_test;".to_string()],
             )
             .await;
-        }
     }
 }

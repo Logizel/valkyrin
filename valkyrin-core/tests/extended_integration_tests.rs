@@ -1,14 +1,12 @@
 //! Extended integration tests covering foreign‑key constraints, enum round‑trip, migration apply & rollback, and SQLite support.
 
 use anyhow::Result;
-use sqlx::{Pool, Executor, Row};
+use sqlx::AnyPool;
 use std::fs;
-use std::path::Path;
 use std::env;
 use uuid::Uuid;
 use valkyrin_core::sync::{SyncEngine, DatabaseType, SyncMode};
 use valkyrin_core::canvas::{CanvasPayload, CanvasTable, CanvasColumn, NodePosition};
-use valkyrin_core::ir::{DataType, Constraints, Field, Entity};
 
 /// Helper to create a temporary working directory for each DB test.
 async fn run_db_test(db_url: &str) -> Result<()> {
@@ -26,7 +24,7 @@ async fn run_db_test(db_url: &str) -> Result<()> {
     env::set_current_dir(&temp_dir)?;
 
     // Ensure a clean DB state.
-    let cleanup = vec![
+    let cleanup = [
         "DROP TABLE IF EXISTS rollback_test;",
         "DROP TABLE IF EXISTS enum_test;",
         "DROP TABLE IF EXISTS posts;",
@@ -42,19 +40,16 @@ async fn run_db_test(db_url: &str) -> Result<()> {
         DatabaseType::MySQL => "ENUM('active','inactive')",
         DatabaseType::SQLite => "TEXT",
     };
-    let stmts = vec![
+    let enum_table_stmt = format!("CREATE TABLE enum_test (id INTEGER PRIMARY KEY, status {} NOT NULL);", enum_decl);
+    let stmts = [
         "CREATE TABLE users (id INTEGER PRIMARY KEY, name VARCHAR(255) NOT NULL);",
         "CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, title VARCHAR(255), CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id));",
-        &format!("CREATE TABLE enum_test (id INTEGER PRIMARY KEY, status {} NOT NULL);", enum_decl),
+        enum_table_stmt.as_str(),
     ];
     SyncEngine::execute_migration(db_url, db_type, &stmts.iter().map(|s| s.to_string()).collect::<Vec<_>>()).await?;
 
     // Verify foreign‑key enforcement.
-    let pool: Pool<_> = match db_type {
-        DatabaseType::PostgreSQL => Pool::<sqlx::Postgres>::connect(db_url).await?,
-        DatabaseType::MySQL => Pool::<sqlx::MySql>::connect(db_url).await?,
-        DatabaseType::SQLite => Pool::<sqlx::Sqlite>::connect(db_url).await?,
-    };
+    let pool = AnyPool::connect(db_url).await?;
     // Insert a valid user.
     sqlx::query("INSERT INTO users (id, name) VALUES (1, 'Alice');")
         .execute(&pool)
@@ -90,6 +85,12 @@ async fn run_db_test(db_url: &str) -> Result<()> {
     assert!(canvas_str.contains("enum_test"), "Canvas missing enum_test table for {}", db_str);
     // Detected FK should be stored as a relation entry.
     assert!(canvas_str.contains("\"relation_type\": \"1:N\""), "Canvas missing detected relation for {}", db_str);
+
+    // Verify enum column is recognized as enum type in canvas.
+    let canvas_payload: CanvasPayload = serde_json::from_str(&canvas_str)?;
+    let enum_table = canvas_payload.tables.iter().find(|t| t.name == "enum_test").expect("enum_test missing");
+    let enum_column = enum_table.columns.iter().find(|c| c.name == "status").expect("status column missing");
+    assert_eq!(enum_column.raw_type, "enum", "Enum column not recognized in canvas for {}", db_str);
 
     // ---------------------------------------------------------------------
     // 3. Add a new table via canvas, generate migration, apply and rollback.
@@ -169,10 +170,8 @@ async fn integration_extended() -> Result<()> {
         env::var("TEST_MYSQL_URL").ok(),
         env::var("TEST_SQLITE_URL").ok(),
     ];
-    for maybe_url in urls {
-        if let Some(url) = maybe_url {
-            run_db_test(&url).await?;
-        }
+    for url in urls.into_iter().flatten() {
+        run_db_test(&url).await?;
     }
     Ok(())
 }
