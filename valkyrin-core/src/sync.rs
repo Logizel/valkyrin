@@ -189,6 +189,39 @@ impl DatabaseIntrospector for PostgresIntrospector {
                 .push((column_name, (ordinal_position - 1) as usize));
         }
 
+        // Fetch index information for PostgreSQL
+        let index_query = r#"
+            SELECT
+                i.relname AS index_name,
+                t.relname AS table_name,
+                a.attname AS column_name
+            FROM pg_class t
+            JOIN pg_index ix ON t.oid = ix.indrelid
+            JOIN pg_class i ON i.oid = ix.indexrelid
+            JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(ix.indkey)
+            JOIN pg_namespace n ON t.relnamespace = n.oid
+            WHERE t.relkind = 'r'
+              AND n.nspname = 'public'
+              AND NOT ix.indisprimary
+              AND NOT ix.indisunique
+        "#;
+        let index_rows = sqlx::query(index_query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch PostgreSQL indexes: {}", e)))?;
+        
+        let mut indexed_columns: std::collections::HashMap<String, std::collections::HashSet<String>> = 
+            std::collections::HashMap::new();
+        for row in index_rows {
+            let table_name: String = row.get("table_name");
+            let column_name: String = row.get("column_name");
+            indexed_columns
+                .entry(table_name)
+                .or_default()
+                .insert(column_name);
+        }
+
         for row in rows {
             let table_name: String = row.get("table_name");
             let column_name: String = row.get("column_name");
@@ -250,6 +283,11 @@ impl DatabaseIntrospector for PostgresIntrospector {
                 .get(&table_name)
                 .and_then(|vec| vec.iter().find(|(col, _)| col == &column_name).map(|(_, ord)| *ord));
 
+            let is_indexed = indexed_columns
+                .get(&table_name)
+                .map(|cols| cols.contains(&column_name))
+                .unwrap_or(false);
+
             current_fields.push(Field {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: column_name,
@@ -259,7 +297,7 @@ impl DatabaseIntrospector for PostgresIntrospector {
                     primary_key_order: pk_order,
                     is_unique: false,
                     is_nullable: is_nullable_str == "YES",
-                    is_indexed: false,
+                    is_indexed,
                     default_value: column_default,
                 },
             });
@@ -377,6 +415,31 @@ impl DatabaseIntrospector for MysqlIntrospector {
                 .push((column_name, (ordinal_position - 1) as usize));
         }
 
+        // Fetch index information for MySQL
+        let index_query = r#"
+            SELECT TABLE_NAME, COLUMN_NAME
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND NON_UNIQUE = 1
+              AND INDEX_NAME != 'PRIMARY'
+        "#;
+        let index_rows = sqlx::query(index_query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch MySQL indexes: {}", e)))?;
+        
+        let mut indexed_columns: std::collections::HashMap<String, std::collections::HashSet<String>> = 
+            std::collections::HashMap::new();
+        for row in index_rows {
+            let table_name: String = row.get("TABLE_NAME");
+            let column_name: String = row.get("COLUMN_NAME");
+            indexed_columns
+                .entry(table_name)
+                .or_default()
+                .insert(column_name);
+        }
+
         for row in rows {
             let table_name: String = row.get("TABLE_NAME");
             let column_name: String = row.get("COLUMN_NAME");
@@ -435,6 +498,11 @@ impl DatabaseIntrospector for MysqlIntrospector {
                 .get(&table_name)
                 .and_then(|vec| vec.iter().find(|(col, _)| col == &column_name).map(|(_, ord)| *ord));
 
+            let is_indexed = indexed_columns
+                .get(&table_name)
+                .map(|cols| cols.contains(&column_name))
+                .unwrap_or(false);
+
             current_fields.push(Field {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: column_name,
@@ -444,7 +512,7 @@ impl DatabaseIntrospector for MysqlIntrospector {
                     primary_key_order: pk_order,
                     is_unique: false,
                     is_nullable: is_nullable_str == "YES",
-                    is_indexed: false,
+                    is_indexed,
                     default_value: column_default,
                 },
             });
@@ -547,6 +615,31 @@ impl DatabaseIntrospector for SqliteIntrospector {
                 .map_err(from_sqlx)
                 .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch SQLite columns for {}: {}", table_name, e)))?;
 
+            // Fetch index information for SQLite
+            let index_list_query = format!("PRAGMA index_list({});", table_name);
+            let index_list_rows = sqlx::query(&index_list_query)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(from_sqlx)
+                .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch SQLite indexes for {}: {}", table_name, e)))?;
+            
+            let mut indexed_columns: std::collections::HashSet<String> = std::collections::HashSet::new();
+            for idx_row in index_list_rows {
+                let idx_name: String = idx_row.get("name");
+                // Skip primary key indexes (they're handled separately)
+                let idx_info_query = format!("PRAGMA index_info({});", idx_name);
+                let idx_info_rows = sqlx::query(&idx_info_query)
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch SQLite index info for {}: {}", idx_name, e)))?;
+                
+                for info_row in idx_info_rows {
+                    let col_name: String = info_row.get("name");
+                    indexed_columns.insert(col_name);
+                }
+            }
+
             let mut fields: Vec<Field> = Vec::new();
 
             for col_row in column_rows {
@@ -581,6 +674,8 @@ impl DatabaseIntrospector for SqliteIntrospector {
 
                 let pk_order = if pk_info > 0 { Some((pk_info - 1) as usize) } else { None };
 
+                let is_indexed = indexed_columns.contains(&column_name);
+
                 fields.push(Field {
                     id: uuid::Uuid::new_v4().to_string(),
                     name: column_name,
@@ -590,7 +685,7 @@ impl DatabaseIntrospector for SqliteIntrospector {
                         primary_key_order: pk_order,
                         is_unique: false,
                         is_nullable: is_nullable == 0,
-                        is_indexed: false,
+                        is_indexed,
                         default_value,
                     },
                 });
