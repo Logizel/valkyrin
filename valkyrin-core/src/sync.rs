@@ -6,6 +6,9 @@ use sqlx::migrate::MigrateDatabase;
 use sqlx::Row;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
+use crate::migration::{create_migration_table, create_migration_table_mysql, create_migration_table_sqlite, pg_advisory_lock, mysql_lock, sqlite_lock, MigrationRecord};
+use sha2::{Sha256, Digest};
+use std::collections::HashMap;
 
 /// Supported database types for introspection
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1253,11 +1256,11 @@ impl SyncEngine {
             DatabaseType::from_url(db_url)?
         };
 
-        // Resolve migration file path
-        let path = if let Some(p) = migration_file {
-            std::path::PathBuf::from(p)
+        // Resolve migration file paths first (common for all DB types)
+        let candidates = if let Some(p) = migration_file {
+            vec![std::path::PathBuf::from(p)]
         } else {
-            // Find the latest migration file for the DB type
+            // Find all migration files for the DB type
             let suffix = match db_type {
                 DatabaseType::PostgreSQL => "postgres",
                 DatabaseType::MySQL => "mysql",
@@ -1280,37 +1283,263 @@ impl SyncEngine {
                         .unwrap_or(false)
                 })
                 .collect();
-            // Sort by filename (timestamp part) descending
-            candidates.sort_by(|a, b| b.cmp(a));
+            // Sort by filename (timestamp part) ascending
+            candidates.sort_by(|a, b| a.cmp(b));
             candidates
-                .into_iter()
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("No migration files found for {}", suffix))?
         };
 
-        println!("🗂️  Running migration file: {}", path.display());
-        let content = fs::read_to_string(&path)?;
-        // Split on ';' to get statements (ignore comments starting with '--')
-        let mut statements = Vec::new();
-        for stmt in content.split(';') {
-            let trimmed = stmt.trim();
-            if trimmed.is_empty() || trimmed.starts_with("--") {
-                continue;
+        // Now handle each database type separately with their specific pool types
+        match db_type {
+            DatabaseType::PostgreSQL => {
+                // Create connection pool and acquire lock
+                let pool = sqlx::Pool::<sqlx::Postgres>::connect(db_url).await?;
+                let mut conn = pool.acquire().await?;
+                pg_advisory_lock(&mut conn, 0x76616C6B7972696E).await?; // 'valkyrin' in hex
+                create_migration_table(&mut conn).await?;
+
+                // Get already applied migrations from the database (use pool as executor)
+                let applied_migrations: Vec<MigrationRecord> = sqlx::query_as(
+                    "SELECT version, name, checksum, applied_at, success FROM _valkyrin_migrations"
+                )
+                .fetch_all(&pool)
+                .await?;
+                
+                // Track which migrations have been applied with their checksums
+                let mut applied: HashMap<String, String> = HashMap::new();
+                for record in applied_migrations {
+                    applied.insert(record.version.clone(), record.checksum);
+                }
+                
+                // Execute pending migrations
+                for path in candidates {
+                    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    let version = file_name.to_string();
+                    
+                    // Read the migration file first to compute checksum
+                    let sql = fs::read_to_string(&path)?;
+                    let checksum = {
+                        let mut hasher = Sha256::new();
+                        hasher.update(sql.as_bytes());
+                        format!("{:x}", hasher.finalize())
+                    };
+                    
+                    // Check if already applied
+                    if let Some(stored_checksum) = applied.get(&version) {
+                        // Validate checksum - reject if migration file was modified after apply
+                        if stored_checksum != &checksum {
+                            return Err(anyhow::anyhow!(
+                                "Migration {} has been modified after being applied (checksum mismatch: stored={}, computed={}). Refusing to re-apply.",
+                                file_name, stored_checksum, checksum
+                            ));
+                        }
+                        println!("⏭️  Migration {} already applied (checksum verified)", file_name);
+                        continue;
+                    }
+                    
+                    // Execute the migration in a transaction
+                    let result = sqlx::query(&sql)
+                        .execute(&pool)
+                        .await;
+                    
+                    // Record the result
+                    match result {
+                        Ok(_) => {
+                            println!("✅  Applied migration: {}", file_name);
+                            sqlx::query(
+                                "INSERT INTO _valkyrin_migrations (version, name, checksum, success) VALUES ($1, $2, $3, $4)"
+                            )
+                            .bind(&version)
+                            .bind(file_name)
+                            .bind(&checksum)
+                            .bind(true)
+                            .execute(&pool)
+                            .await?;
+                        }
+                        Err(e) => {
+                            println!("❌  Failed to apply migration: {}", file_name);
+                            sqlx::query(
+                                "INSERT INTO _valkyrin_migrations (version, name, checksum, success) VALUES ($1, $2, $3, $4)"
+                            )
+                            .bind(&version)
+                            .bind(file_name)
+                            .bind(&checksum)
+                            .bind(false)
+                            .execute(&pool)
+                            .await?;
+                            return Err(anyhow::anyhow!("Migration failed: {}", e));
+                        }
+                    }
+                }
+        
+        Ok(())
             }
-            statements.push(format!("{};", trimmed));
-        }
-        if statements.is_empty() {
-            println!("⚠️  No executable statements found in migration file.");
-            return Ok(());
-        }
+            DatabaseType::MySQL => {
+                // Create connection pool and acquire lock
+                let pool = sqlx::Pool::<sqlx::MySql>::connect(db_url).await?;
+                let mut conn = pool.acquire().await?;
+                mysql_lock(&mut conn, "valkyrin_migration_lock").await?;
+                create_migration_table_mysql(&mut conn).await?;
 
-        // Show statements
-        println!("📜 Executing {} statements:", statements.len());
-        for s in &statements {
-            println!("   ▶ {}", s);
-        }
+                // Get already applied migrations from the database (use pool as executor)
+                let applied_migrations: Vec<MigrationRecord> = sqlx::query_as(
+                    "SELECT version, name, checksum, applied_at, success FROM _valkyrin_migrations"
+                )
+                .fetch_all(&pool)
+                .await?;
+                
+                // Track which migrations have been applied with their checksums
+                let mut applied: HashMap<String, String> = HashMap::new();
+                for record in applied_migrations {
+                    applied.insert(record.version.clone(), record.checksum);
+                }
+                
+                // Execute pending migrations
+                for path in candidates {
+                    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    let version = file_name.to_string();
+                    
+                    // Read the migration file first to compute checksum
+                    let sql = fs::read_to_string(&path)?;
+                    let checksum = {
+                        let mut hasher = Sha256::new();
+                        hasher.update(sql.as_bytes());
+                        format!("{:x}", hasher.finalize())
+                    };
+                    
+                    // Check if already applied
+                    if let Some(stored_checksum) = applied.get(&version) {
+                        // Validate checksum - reject if migration file was modified after apply
+                        if stored_checksum != &checksum {
+                            return Err(anyhow::anyhow!(
+                                "Migration {} has been modified after being applied (checksum mismatch: stored={}, computed={}). Refusing to re-apply.",
+                                file_name, stored_checksum, checksum
+                            ));
+                        }
+                        println!("⏭️  Migration {} already applied (checksum verified)", file_name);
+                        continue;
+                    }
+                    
+                    // Execute the migration in a transaction
+                    let result = sqlx::query(&sql)
+                        .execute(&pool)
+                        .await;
+                    
+                    // Record the result
+                    match result {
+                        Ok(_) => {
+                            println!("✅  Applied migration: {}", file_name);
+                            sqlx::query(
+                                "INSERT INTO _valkyrin_migrations (version, name, checksum, success) VALUES (?, ?, ?, ?)"
+                            )
+                            .bind(&version)
+                            .bind(file_name)
+                            .bind(&checksum)
+                            .bind(true)
+                            .execute(&pool)
+                            .await?;
+                        }
+                        Err(e) => {
+                            println!("❌  Failed to apply migration: {}", file_name);
+                            sqlx::query(
+                                "INSERT INTO _valkyrin_migrations (version, name, checksum, success) VALUES (?, ?, ?, ?)"
+                            )
+                            .bind(&version)
+                            .bind(file_name)
+                            .bind(&checksum)
+                            .bind(false)
+                            .execute(&pool)
+                            .await?;
+                            return Err(anyhow::anyhow!("Migration failed: {}", e));
+                        }
+                    }
+                }
+                
+                Ok(())
+            }
+            DatabaseType::SQLite => {
+                // Create connection pool and acquire lock
+                sqlite_lock(db_url).await?;
+                let pool = sqlx::Pool::<sqlx::Sqlite>::connect(db_url).await?;
+                let mut conn = pool.acquire().await?;
+                create_migration_table_sqlite(&mut conn).await?;
 
-        Self::execute_migration(db_url, db_type, &statements).await
+                // Get already applied migrations from the database (use pool as executor)
+                let applied_migrations: Vec<MigrationRecord> = sqlx::query_as(
+                    "SELECT version, name, checksum, applied_at, success FROM _valkyrin_migrations"
+                )
+                .fetch_all(&pool)
+                .await?;
+                
+                // Track which migrations have been applied with their checksums
+                let mut applied: HashMap<String, String> = HashMap::new();
+                for record in applied_migrations {
+                    applied.insert(record.version.clone(), record.checksum);
+                }
+                
+                // Execute pending migrations
+                for path in candidates {
+                    let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    let version = file_name.to_string();
+                    
+                    // Read the migration file first to compute checksum
+                    let sql = fs::read_to_string(&path)?;
+                    let checksum = {
+                        let mut hasher = Sha256::new();
+                        hasher.update(sql.as_bytes());
+                        format!("{:x}", hasher.finalize())
+                    };
+                    
+                    // Check if already applied
+                    if let Some(stored_checksum) = applied.get(&version) {
+                        // Validate checksum - reject if migration file was modified after apply
+                        if stored_checksum != &checksum {
+                            return Err(anyhow::anyhow!(
+                                "Migration {} has been modified after being applied (checksum mismatch: stored={}, computed={}). Refusing to re-apply.",
+                                file_name, stored_checksum, checksum
+                            ));
+                        }
+                        println!("⏭️  Migration {} already applied (checksum verified)", file_name);
+                        continue;
+                    }
+                    
+                    // Execute the migration in a transaction
+                    let result = sqlx::query(&sql)
+                        .execute(&pool)
+                        .await;
+                    
+                    // Record the result
+                    match result {
+                        Ok(_) => {
+                            println!("✅  Applied migration: {}", file_name);
+                            sqlx::query(
+                                "INSERT INTO _valkyrin_migrations (version, name, checksum, success) VALUES (?, ?, ?, ?)"
+                            )
+                            .bind(&version)
+                            .bind(file_name)
+                            .bind(&checksum)
+                            .bind(true)
+                            .execute(&pool)
+                            .await?;
+                        }
+                        Err(e) => {
+                            println!("❌  Failed to apply migration: {}", file_name);
+                            sqlx::query(
+                                "INSERT INTO _valkyrin_migrations (version, name, checksum, success) VALUES (?, ?, ?, ?)"
+                            )
+                            .bind(&version)
+                            .bind(file_name)
+                            .bind(&checksum)
+                            .bind(false)
+                            .execute(&pool)
+                            .await?;
+                            return Err(anyhow::anyhow!("Migration failed: {}", e));
+                        }
+                    }
+                }
+                
+                Ok(())
+            }
+        }
     }
 
     /// Rolls back the last N migrations by executing their DOWN SQL.
