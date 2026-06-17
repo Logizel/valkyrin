@@ -5,4 +5,3 @@ pub mod compiler;
 pub mod config;
 pub mod ir;
 pub mod sync;
-pub mod migration;

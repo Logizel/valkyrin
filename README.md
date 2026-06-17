@@ -45,7 +45,7 @@ Valkyrin supports composite primary keys. In the canvas, mark multiple columns a
 
 1. Does not use any _LLM_ to generate the code.
 2. Runs totally _offline and locally_.
-3. Multi-language and multi-ORM support (More languages and their respective ORMs support will be added in future releases).
+3. Multi-language and multi-ORM support (Extra languages and respective ORMs support will be added in further updates).
 
 ## Status
 
