@@ -1,5 +1,4 @@
 // valkyrin-core/src/error.rs
-use std::fmt;
 use thiserror::Error;
 
 /// Structured error types for Valkyrin with error codes for CI/CD integration

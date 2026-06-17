@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 use colored::*;
 use serde_json;
 use std::panic;
-use valkyrin_core::error::{ValkyrinError, ValkyrinResult};
+use valkyrin_core::error::ValkyrinError;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
