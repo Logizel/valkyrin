@@ -47,7 +47,10 @@ impl LanguageDriver for GoGormDriver {
             DataType::DateTime => "time.Time",
             DataType::Json => "datatypes.JSON",
             DataType::Uuid => "uuid.UUID",
-            DataType::Enum { values: _, type_name: _ } => "string", // Go enums stored as strings, constants generated separately
+            DataType::Enum { values: _, type_name } => {
+                // Use native PostgreSQL enum type name if available
+                type_name.as_deref().unwrap_or("string")
+            }
         };
 
         if is_nullable {
@@ -86,7 +89,8 @@ impl LanguageDriver for GoGormDriver {
 
         output.push_str(&format!("import (\n\t{}\n)\n\n", imports.join("\n\t")));
 
-        // Generate enum constants for each enum field
+        // Generate enum constants for each enum field (fallback for non-PostgreSQL enums)
+        // For PostgreSQL native enums (with type_name), we just need the type declaration
         let enum_fields: Vec<&Field> = entity
             .fields
             .iter()
@@ -95,15 +99,22 @@ impl LanguageDriver for GoGormDriver {
 
         if !enum_fields.is_empty() {
             for field in &enum_fields {
-                if let DataType::Enum { values, type_name: _ } = &field.data_type {
-                    let const_name = format!("{}Status", capitalize_first(&field.name));
-                    output.push_str(&format!("type {} string\n\n", const_name));
-                    output.push_str("const (\n");
-                    for val in values {
-                        let const_val = format!("{}{}", const_name, capitalize_first(val));
-                        output.push_str(&format!("\t{} {} = \"{}\"\n", const_val, const_name, val));
+                if let DataType::Enum { values, type_name } = &field.data_type {
+                    if let Some(enum_type) = type_name {
+                        // Native PostgreSQL enum - emit CREATE TYPE (handled in migrations)
+                        // Go will use the type name directly
+                        output.push_str(&format!("type {} = string\n\n", enum_type));
+                    } else {
+                        // Fallback: generate Go constants
+                        let const_name = format!("{}Status", capitalize_first(&field.name));
+                        output.push_str(&format!("type {} string\n\n", const_name));
+                        output.push_str("const (\n");
+                        for val in values {
+                            let const_val = format!("{}{}", const_name, capitalize_first(val));
+                            output.push_str(&format!("\t{} {} = \"{}\"\n", const_val, const_name, val));
+                        }
+                        output.push_str(")\n\n");
                     }
-                    output.push_str(")\n\n");
                 }
             }
         }
@@ -129,6 +140,10 @@ impl LanguageDriver for GoGormDriver {
             }
             if field.constraints.is_indexed && !field.constraints.is_primary_key && !field.constraints.is_unique {
                 gorm_tags.push("index".to_string());
+            }
+            // Add gorm:type for native enums
+            if let DataType::Enum { type_name: Some(_), .. } = &field.data_type {
+                gorm_tags.push("type:varchar(255)".to_string()); // Will be overridden by actual enum type in DB
             }
 
             let exported_name = capitalize_first(&field.name);
@@ -284,7 +299,10 @@ impl LanguageDriver for PythonSqlModelDriver {
             DataType::DateTime => "datetime",
             DataType::Json => "dict",
             DataType::Uuid => "UUID",
-            DataType::Enum { values: _, type_name: _ } => "str",
+            DataType::Enum { values: _, type_name } => {
+                // Use native PostgreSQL enum type name if available
+                type_name.as_deref().unwrap_or("str")
+            }
         };
 
         if is_nullable {
@@ -310,14 +328,19 @@ impl LanguageDriver for PythonSqlModelDriver {
             .collect();
 
         for field in &enum_fields {
-            if let DataType::Enum { values, type_name: _ } = &field.data_type {
-                let enum_name = format!("{}Enum", capitalize_first(&field.name));
-                output.push_str(&format!("class {}(str, Enum):\n", enum_name));
-                for val in values {
-                    let const_name = val.to_uppercase();
-                    output.push_str(&format!("    {} = \"{}\"\n", const_name, val));
+            if let DataType::Enum { values, type_name } = &field.data_type {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - use the type directly
+                    output.push_str(&format!("{} = str\n", enum_type));
+                } else {
+                    let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                    output.push_str(&format!("class {}(str, Enum):\n", enum_name));
+                    for val in values {
+                        let const_name = val.to_uppercase();
+                        output.push_str(&format!("    {} = \"{}\"\n", const_name, val));
+                    }
+                    output.push('\n');
                 }
-                output.push('\n');
             }
         }
 
@@ -331,12 +354,21 @@ impl LanguageDriver for PythonSqlModelDriver {
         let _has_composite_pk = pk_fields.len() > 1;
 
         for field in &entity.fields {
-            let py_type = if let DataType::Enum { values: _, type_name: _ } = &field.data_type {
-                let enum_name = format!("{}Enum", capitalize_first(&field.name));
-                if field.constraints.is_nullable {
-                    format!("Optional[{}]", enum_name)
+            let py_type = if let DataType::Enum { values: _, type_name } = &field.data_type {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - use the type directly
+                    if field.constraints.is_nullable {
+                        format!("Optional[{}]", enum_type)
+                    } else {
+                        enum_type.to_string()
+                    }
                 } else {
-                    enum_name
+                    let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                    if field.constraints.is_nullable {
+                        format!("Optional[{}]", enum_name)
+                    } else {
+                        enum_name
+                    }
                 }
             } else {
                 self.map_data_type(&field.data_type, field.constraints.is_nullable)
@@ -505,7 +537,10 @@ impl LanguageDriver for GoEntDriver {
             DataType::DateTime => "time.Time",
             DataType::Json => "json.RawMessage",
             DataType::Uuid => "uuid.UUID",
-            DataType::Enum { values: _, type_name: _ } => "string",
+            DataType::Enum { values: _, type_name } => {
+                // Use native PostgreSQL enum type name if available
+                type_name.as_deref().unwrap_or("string")
+            }
         };
 
         if is_nullable {
@@ -544,15 +579,19 @@ impl LanguageDriver for GoEntDriver {
 
         if !enum_fields.is_empty() {
             for field in &enum_fields {
-                if let DataType::Enum { values, type_name: _ } = &field.data_type {
-                    let const_name = format!("{}Status", capitalize_first(&field.name));
-                    output.push_str(&format!("type {} string\n\n", const_name));
-                    output.push_str("const (\n");
-                    for val in values {
-                        let const_val = format!("{}{}", const_name, capitalize_first(val));
-                        output.push_str(&format!("\t{} {} = \"{}\"\n", const_val, const_name, val));
+                if let DataType::Enum { values, type_name } = &field.data_type {
+                    if let Some(enum_type) = type_name {
+                        output.push_str(&format!("type {} = string\n\n", enum_type));
+                    } else {
+                        let const_name = format!("{}Status", capitalize_first(&field.name));
+                        output.push_str(&format!("type {} string\n\n", const_name));
+                        output.push_str("const (\n");
+                        for val in values {
+                            let const_val = format!("{}{}", const_name, capitalize_first(val));
+                            output.push_str(&format!("\t{} {} = \"{}\"\n", const_val, const_name, val));
+                        }
+                        output.push_str(")\n\n");
                     }
-                    output.push_str(")\n\n");
                 }
             }
         }
@@ -738,9 +777,14 @@ impl LanguageDriver for PythonSqlAlchemyDriver {
             DataType::DateTime => "DateTime".to_string(),
             DataType::Json => "JSON".to_string(),
             DataType::Uuid => "Uuid".to_string(),
-            DataType::Enum { values, type_name: _ } => {
-                let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
-                format!("Enum({})", enum_vals)
+            DataType::Enum { values, type_name } => {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - use the type name
+                    enum_type.to_string()
+                } else {
+                    let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                    format!("Enum({})", enum_vals)
+                }
             },
         };
 
@@ -925,7 +969,9 @@ impl LanguageDriver for RustDieselDriver {
             DataType::DateTime => "chrono::NaiveDateTime".to_string(),
             DataType::Json => "serde_json::Value".to_string(),
             DataType::Uuid => "uuid::Uuid".to_string(),
-            DataType::Enum { values: _, type_name: _ } => "String".to_string(), // Placeholder, actual type determined in generate_model
+            DataType::Enum { values: _, type_name } => {
+                type_name.as_deref().unwrap_or("String").to_string()
+            }
         }
     }
 
@@ -945,42 +991,47 @@ impl LanguageDriver for RustDieselDriver {
             .collect();
 
         for field in &enum_fields {
-            if let DataType::Enum { values, type_name: _ } = &field.data_type {
-                let enum_name = format!("{}Enum", capitalize_first(&field.name));
-                output.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, diesel::deserialize::FromSqlRow, diesel::serialize::ToSql)]\n");
-                output.push_str("#[diesel(sql_type = Text)]\n");
-                output.push_str(&format!("pub enum {} {{\n", enum_name));
-                for val in values {
-                    let variant = capitalize_first(val);
-                    output.push_str(&format!("    {},\n", variant));
-                }
-                output.push_str("}\n\n");
+            if let DataType::Enum { values, type_name } = &field.data_type {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - emit type alias
+                    output.push_str(&format!("type {} = String;\n\n", enum_type));
+                } else {
+                    let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                    output.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, diesel::deserialize::FromSqlRow, diesel::serialize::ToSql)]\n");
+                    output.push_str("#[diesel(sql_type = Text)]\n");
+                    output.push_str(&format!("pub enum {} {{\n", enum_name));
+                    for val in values {
+                        let variant = capitalize_first(val);
+                        output.push_str(&format!("    {},\n", variant));
+                    }
+                    output.push_str("}\n\n");
 
-                output.push_str(&format!("impl diesel::serialize::ToSql<Text, diesel::pg::Pg> for {} {{\n", enum_name));
-                output.push_str("    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {\n");
-                output.push_str("        let s = match self {\n");
-                for val in values {
-                    let variant = capitalize_first(val);
-                    output.push_str(&format!("            {}::{} => \"{}\",\n", enum_name, variant, val));
-                }
-                output.push_str("        };\n");
-                output.push_str("        out.write_all(s.as_bytes())?;\n");
-                output.push_str("        Ok(diesel::serialize::IsNull::No)\n");
-                output.push_str("    }\n");
-                output.push_str("}\n\n");
+                    output.push_str(&format!("impl diesel::serialize::ToSql<Text, diesel::pg::Pg> for {} {{\n", enum_name));
+                    output.push_str("    fn to_sql<'b>(&'b self, out: &mut diesel::serialize::Output<'b, '_, diesel::pg::Pg>) -> diesel::serialize::Result {\n");
+                    output.push_str("        let s = match self {\n");
+                    for val in values {
+                        let variant = capitalize_first(val);
+                        output.push_str(&format!("            {}::{} => \"{}\",\n", enum_name, variant, val));
+                    }
+                    output.push_str("        };\n");
+                    output.push_str("        out.write_all(s.as_bytes())?;\n");
+                    output.push_str("        Ok(diesel::serialize::IsNull::No)\n");
+                    output.push_str("    }\n");
+                    output.push_str("}\n\n");
 
-                output.push_str(&format!("impl diesel::deserialize::FromSql<Text, diesel::pg::Pg> for {} {{\n", enum_name));
-                output.push_str("    fn from_sql(bytes: diesel::backend::RawValue<'_, diesel::pg::Pg>) -> diesel::deserialize::Result<Self> {\n");
-                output.push_str("        let s = std::str::from_utf8(bytes.as_bytes())?;\n");
-                output.push_str("        match s {\n");
-                for val in values {
-                    let variant = capitalize_first(val);
-                    output.push_str(&format!("            \"{}\" => Ok({}::{}),\n", val, enum_name, variant));
+                    output.push_str(&format!("impl diesel::deserialize::FromSql<Text, diesel::pg::Pg> for {} {{\n", enum_name));
+                    output.push_str("    fn from_sql(bytes: diesel::backend::RawValue<'_, diesel::pg::Pg>) -> diesel::deserialize::Result<Self> {\n");
+                    output.push_str("        let s = std::str::from_utf8(bytes.as_bytes())?;\n");
+                    output.push_str("        match s {\n");
+                    for val in values {
+                        let variant = capitalize_first(val);
+                        output.push_str(&format!("            \"{}\" => Ok({}::{}),\n", val, enum_name, variant));
+                    }
+                    output.push_str("            _ => Err(format!(\"Invalid variant for {}: {}\", stringify!({}), s).into()),\n");
+                    output.push_str("        }\n");
+                    output.push_str("    }\n");
+                    output.push_str("}\n\n");
                 }
-                output.push_str("            _ => Err(format!(\"Invalid variant for {}: {}\", stringify!({}), s).into()),\n");
-                output.push_str("        }\n");
-                output.push_str("    }\n");
-                output.push_str("}\n\n");
             }
         }
 
@@ -990,7 +1041,9 @@ impl LanguageDriver for RustDieselDriver {
 
         for field in &entity.fields {
             let rust_type = match &field.data_type {
-                DataType::Enum { values: _, type_name: _ } => format!("{}Enum", capitalize_first(&field.name)),
+                DataType::Enum { values: _, type_name } => {
+                    type_name.as_deref().unwrap_or(&format!("{}Enum", capitalize_first(&field.name))).to_string()
+                }
                 _ => self.map_data_type(&field.data_type, field.constraints.is_nullable),
             };
 
@@ -1130,7 +1183,9 @@ impl LanguageDriver for RustSeaOrmDriver {
             DataType::DateTime => "DateTime".to_string(),
             DataType::Json => "Json".to_string(),
             DataType::Uuid => "Uuid".to_string(),
-            DataType::Enum { values: _, type_name: _ } => "String".to_string(), // Placeholder, actual type determined in generate_model
+            DataType::Enum { values: _, type_name } => {
+                type_name.as_deref().unwrap_or("String").to_string()
+            }
         };
 
         if is_nullable {
@@ -1156,17 +1211,22 @@ impl LanguageDriver for RustSeaOrmDriver {
             .collect();
 
         for field in &enum_fields {
-            if let DataType::Enum { values, type_name: _ } = &field.data_type {
-                let enum_name = format!("{}Enum", capitalize_first(&field.name));
-                output.push_str("#[derive(Debug, Clone, PartialEq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]\n");
-                output.push_str(&format!("#[sea_orm(rs_type = \"String\", db_type = \"Enum\", enum_name = \"{}\")]\n", field.name));
-                output.push_str(&format!("pub enum {} {{\n", enum_name));
-                for val in values {
-                    let variant = capitalize_first(val);
-                    output.push_str(&format!("    #[sea_orm(string_value = \"{}\")]\n", val));
-                    output.push_str(&format!("    {},\n", variant));
+            if let DataType::Enum { values, type_name } = &field.data_type {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - emit type alias for the enum
+                    output.push_str(&format!("type {} = String;\n\n", enum_type));
+                } else {
+                    let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                    output.push_str("#[derive(Debug, Clone, PartialEq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]\n");
+                    output.push_str(&format!("#[sea_orm(rs_type = \"String\", db_type = \"Enum\", enum_name = \"{}\")]\n", field.name));
+                    output.push_str(&format!("pub enum {} {{\n", enum_name));
+                    for val in values {
+                        let variant = capitalize_first(val);
+                        output.push_str(&format!("    #[sea_orm(string_value = \"{}\")]\n", val));
+                        output.push_str(&format!("    {},\n", variant));
+                    }
+                    output.push_str("}\n\n");
                 }
-                output.push_str("}\n\n");
             }
         }
 
@@ -1175,12 +1235,20 @@ impl LanguageDriver for RustSeaOrmDriver {
         output.push_str("pub struct Model {\n");
 
         for field in &entity.fields {
-            let sea_type = if let DataType::Enum { values: _, type_name: _ } = &field.data_type {
-                let enum_name = format!("{}Enum", capitalize_first(&field.name));
-                if field.constraints.is_nullable {
-                    format!("Option<{}>", enum_name)
+            let sea_type = if let DataType::Enum { values: _, type_name } = &field.data_type {
+                if let Some(enum_type) = type_name {
+                    if field.constraints.is_nullable {
+                        format!("Option<{}>", enum_type)
+                    } else {
+                        enum_type.to_string()
+                    }
                 } else {
-                    enum_name
+                    let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                    if field.constraints.is_nullable {
+                        format!("Option<{}>", enum_name)
+                    } else {
+                        enum_name
+                    }
                 }
             } else {
                 self.map_data_type(&field.data_type, field.constraints.is_nullable)
@@ -1337,9 +1405,14 @@ impl LanguageDriver for JavaScriptSequelizeDriver {
             DataType::DateTime => "DataTypes.DATE".to_string(),
             DataType::Json => "DataTypes.JSON".to_string(),
             DataType::Uuid => "DataTypes.UUID".to_string(),
-            DataType::Enum { values, type_name: _ } => {
-                let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
-                format!("DataTypes.ENUM({})", enum_vals)
+            DataType::Enum { values, type_name } => {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - use custom type
+                    format!("DataTypes.ENUM(\"{}\")", enum_type)
+                } else {
+                    let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                    format!("DataTypes.ENUM({})", enum_vals)
+                }
             },
         }
     }
@@ -1742,10 +1815,15 @@ impl LanguageDriver for TypeScriptPrismaDriver {
             DataType::DateTime => "DateTime".to_string(),
             DataType::Json => "Json".to_string(),
             DataType::Uuid => "String @id @default(uuid())".to_string(),
-            DataType::Enum { values, type_name: _ } => {
-                capitalize_first(
-                    values.first().map(|v| v.as_str()).unwrap_or("Status")
-                )
+            DataType::Enum { values, type_name } => {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - use the type name
+                    enum_type.to_string()
+                } else {
+                    capitalize_first(
+                        values.first().map(|v| v.as_str()).unwrap_or("Status")
+                    )
+                }
             },
         }
     }
@@ -1765,14 +1843,17 @@ impl LanguageDriver for TypeScriptPrismaDriver {
 
         if !enum_fields.is_empty() {
             for field in &enum_fields {
-                if let DataType::Enum { values, type_name: _ } = &field.data_type {
-                    let enum_name = capitalize_first(&field.name);
-                    output.push_str(&format!("enum {} {{\n", enum_name));
-                    for val in values {
-                        let variant = val.to_uppercase();
-                        output.push_str(&format!("  {}\n", variant));
+                if let DataType::Enum { values, type_name } = &field.data_type {
+                    if type_name.is_none() {
+                        // Only generate enum block if not using native PostgreSQL enum
+                        let enum_name = capitalize_first(&field.name);
+                        output.push_str(&format!("enum {} {{\n", enum_name));
+                        for val in values {
+                            let variant = val.to_uppercase();
+                            output.push_str(&format!("  {}\n", variant));
+                        }
+                        output.push_str("}\n\n");
                     }
-                    output.push_str("}\n\n");
                 }
             }
         }
@@ -1789,12 +1870,21 @@ impl LanguageDriver for TypeScriptPrismaDriver {
         for field in &entity.fields {
             let prisma_type = if field.constraints.is_primary_key && matches!(field.data_type, DataType::Uuid) && !has_composite_pk {
                 "String @id @default(uuid())".to_string()
-            } else if let DataType::Enum { values: _, type_name: _ } = &field.data_type {
-                let enum_name = capitalize_first(&field.name).to_string();
-                if field.constraints.is_nullable {
-                    format!("{}?", enum_name)
+            } else if let DataType::Enum { values: _, type_name } = &field.data_type {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - use the type name directly
+                    if field.constraints.is_nullable {
+                        format!("{}?", enum_type)
+                    } else {
+                        enum_type.to_string()
+                    }
                 } else {
-                    enum_name
+                    let enum_name = capitalize_first(&field.name).to_string();
+                    if field.constraints.is_nullable {
+                        format!("{}?", enum_name)
+                    } else {
+                        enum_name
+                    }
                 }
             } else {
                 let base_type = self.map_data_type(&field.data_type, field.constraints.is_nullable);
@@ -1997,9 +2087,14 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
             DataType::DateTime => "timestamp".to_string(),
             DataType::Json => "json".to_string(),
             DataType::Uuid => "uuid".to_string(),
-            DataType::Enum { values, type_name: _ } => {
-                let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
-                format!("enum({})", enum_vals)
+            DataType::Enum { values, type_name } => {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - use custom type
+                    format!("enum(\"{}\")", enum_type)
+                } else {
+                    let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                    format!("enum({})", enum_vals)
+                }
             },
         }
     }
@@ -2061,7 +2156,9 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
                     DataType::Boolean => "boolean".to_string(),
                     DataType::Integer(_) => "number".to_string(),
                     DataType::Float | DataType::Decimal { .. } => "number".to_string(),
-                    DataType::Enum { values: _, type_name: _ } => format!("{}Enum", capitalize_first(&field.name)),
+                    DataType::Enum { values: _, type_name } => {
+                        type_name.as_deref().unwrap_or(&format!("{}Enum", capitalize_first(&field.name))).to_string()
+                    }
                     _ => "string".to_string(),
                 };
 
@@ -2077,14 +2174,17 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
 
         if !enum_fields.is_empty() {
             for field in &enum_fields {
-                if let DataType::Enum { values, type_name: _ } = &field.data_type {
-                    let enum_name = format!("{}Enum", capitalize_first(&field.name));
-                    output.push_str(&format!("export enum {} {{\n", enum_name));
-                    for val in values {
-                        let const_name = val.to_uppercase();
-                        output.push_str(&format!("    {} = '{}',\n", const_name, val));
+                if let DataType::Enum { values, type_name } = &field.data_type {
+                    if type_name.is_none() {
+                        // Only generate TypeScript enum if not using native PostgreSQL enum
+                        let enum_name = format!("{}Enum", capitalize_first(&field.name));
+                        output.push_str(&format!("export enum {} {{\n", enum_name));
+                        for val in values {
+                            let const_name = val.to_uppercase();
+                            output.push_str(&format!("    {} = '{}',\n", const_name, val));
+                        }
+                        output.push_str("}\n\n");
                     }
-                    output.push_str("}\n\n");
                 }
             }
         }
