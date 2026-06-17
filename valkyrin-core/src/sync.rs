@@ -1,6 +1,6 @@
 // valkyrin-core/src/sync.rs
+use crate::error::{ValkyrinError, ValkyrinResult, from_sqlx};
 use crate::ir::{DataType, Entity, Field};
-use anyhow::{Context, Result as AnyhowResult};
 use async_trait::async_trait;
 use sqlx::migrate::MigrateDatabase;
 use sqlx::Row;
@@ -20,7 +20,7 @@ pub enum DatabaseType {
 
 impl DatabaseType {
     /// Detect database type from connection URL
-    pub fn from_url(url: &str) -> AnyhowResult<Self> {
+    pub fn from_url(url: &str) -> ValkyrinResult<Self> {
         if url.starts_with("postgresql://") || url.starts_with("postgres://") {
             Ok(DatabaseType::PostgreSQL)
         } else if url.starts_with("mysql://") {
@@ -28,8 +28,8 @@ impl DatabaseType {
         } else if url.starts_with("sqlite://") {
             Ok(DatabaseType::SQLite)
         } else {
-            Err(anyhow::anyhow!(
-                "Unsupported database URL scheme. Supported: postgresql://, mysql://, sqlite://"
+            Err(ValkyrinError::Database(
+                "Unsupported database URL scheme. Supported: postgresql://, mysql://, sqlite://".to_string()
             ))
         }
     }
@@ -112,8 +112,8 @@ pub enum SyncMode {
 
 #[async_trait]
 pub trait DatabaseIntrospector: Send + Sync {
-    async fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>>;
-    async fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>>;
+    async fn fetch_schema(&self) -> ValkyrinResult<Vec<Entity>>;
+    async fn fetch_relations(&self) -> ValkyrinResult<Vec<DetectedRelation>>;
 }
 
 // ──────────────────────────────────────────────
@@ -125,17 +125,17 @@ pub struct PostgresIntrospector {
 }
 
 impl PostgresIntrospector {
-    pub async fn new(url: &str) -> AnyhowResult<Self> {
-        let pool = sqlx::Pool::<sqlx::Postgres>::connect(url).await.context(
-            "Failed to connect to PostgreSQL. Is the URL correct?",
-        )?;
+    pub async fn new(url: &str) -> ValkyrinResult<Self> {
+        let pool = sqlx::Pool::<sqlx::Postgres>::connect(url).await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Database(format!("Failed to connect to PostgreSQL: {}", e)))?;
         Ok(Self { pool })
     }
 }
 
 #[async_trait]
 impl DatabaseIntrospector for PostgresIntrospector {
-    async fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>> {
+    async fn fetch_schema(&self) -> ValkyrinResult<Vec<Entity>> {
         let query = r#"
             SELECT
                 table_name,
@@ -149,7 +149,11 @@ impl DatabaseIntrospector for PostgresIntrospector {
             ORDER BY table_name, ordinal_position;
         "#;
 
-        let rows = sqlx::query(query).fetch_all(&self.pool).await?;
+        let rows = sqlx::query(query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch PostgreSQL schema: {}", e)))?;
         let mut entities: Vec<Entity> = Vec::new();
         let mut current_table_name = String::new();
         let mut current_fields: Vec<Field> = Vec::new();
@@ -162,7 +166,11 @@ impl DatabaseIntrospector for PostgresIntrospector {
             WHERE tc.table_schema = 'public' AND tc.constraint_type = 'PRIMARY KEY'
             ORDER BY table_name, ordinal_position
         "#;
-        let pk_rows = sqlx::query(pk_query).fetch_all(&self.pool).await?;
+        let pk_rows = sqlx::query(pk_query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch PostgreSQL primary keys: {}", e)))?;
         let mut primary_key_orders: std::collections::HashMap<String, Vec<(String, usize)>> =
             std::collections::HashMap::new();
         for row in pk_rows {
@@ -202,7 +210,9 @@ impl DatabaseIntrospector for PostgresIntrospector {
                     sqlx::query(enum_query)
                         .bind(type_name)
                         .fetch_all(&self.pool)
-                        .await?
+                        .await
+                        .map_err(from_sqlx)
+                        .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch PostgreSQL enum values: {}", e)))?
                         .iter()
                         .map(|r| r.get::<String, _>("enumlabel"))
                         .collect()
@@ -257,7 +267,7 @@ impl DatabaseIntrospector for PostgresIntrospector {
         Ok(entities)
     }
 
-    async fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>> {
+    async fn fetch_relations(&self) -> ValkyrinResult<Vec<DetectedRelation>> {
         let query = r#"
             SELECT
                 tc.table_name AS source_table,
@@ -275,7 +285,11 @@ impl DatabaseIntrospector for PostgresIntrospector {
               AND tc.table_schema = 'public'
         "#;
 
-        let rows = sqlx::query(query).fetch_all(&self.pool).await?;
+        let rows = sqlx::query(query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch PostgreSQL relations: {}", e)))?;
         let mut relations = Vec::new();
         for row in rows {
             relations.push(DetectedRelation {
@@ -298,17 +312,18 @@ pub struct MysqlIntrospector {
 }
 
 impl MysqlIntrospector {
-    pub async fn new(url: &str) -> AnyhowResult<Self> {
+    pub async fn new(url: &str) -> ValkyrinResult<Self> {
         let pool = sqlx::Pool::<sqlx::MySql>::connect(url)
             .await
-            .context("Failed to connect to MySQL. Is the URL correct?")?;
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Database(format!("Failed to connect to MySQL: {}", e)))?;
         Ok(Self { pool })
     }
 }
 
 #[async_trait]
 impl DatabaseIntrospector for MysqlIntrospector {
-    async fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>> {
+    async fn fetch_schema(&self) -> ValkyrinResult<Vec<Entity>> {
         let query = r#"
             SELECT
                 TABLE_NAME,
@@ -321,7 +336,11 @@ impl DatabaseIntrospector for MysqlIntrospector {
             ORDER BY TABLE_NAME, ORDINAL_POSITION
         "#;
 
-        let rows = sqlx::query(query).fetch_all(&self.pool).await?;
+        let rows = sqlx::query(query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch MySQL schema: {}", e)))?;
         let mut entities: Vec<Entity> = Vec::new();
         let mut current_table_name = String::new();
         let mut current_fields: Vec<Field> = Vec::new();
@@ -332,7 +351,11 @@ impl DatabaseIntrospector for MysqlIntrospector {
             WHERE TABLE_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'PRIMARY'
             ORDER BY TABLE_NAME, ORDINAL_POSITION
         "#;
-        let pk_rows = sqlx::query(pk_query).fetch_all(&self.pool).await?;
+        let pk_rows = sqlx::query(pk_query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch MySQL primary keys: {}", e)))?;
         let mut primary_key_orders: std::collections::HashMap<String, Vec<(String, usize)>> =
             std::collections::HashMap::new();
         for row in pk_rows {
@@ -426,7 +449,7 @@ impl DatabaseIntrospector for MysqlIntrospector {
         Ok(entities)
     }
 
-    async fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>> {
+    async fn fetch_relations(&self) -> ValkyrinResult<Vec<DetectedRelation>> {
         let query = r#"
             SELECT
                 kcu.TABLE_NAME AS source_table,
@@ -438,7 +461,11 @@ impl DatabaseIntrospector for MysqlIntrospector {
               AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
         "#;
 
-        let rows = sqlx::query(query).fetch_all(&self.pool).await?;
+        let rows = sqlx::query(query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch MySQL relations: {}", e)))?;
         let mut relations = Vec::new();
         for row in rows {
             relations.push(DetectedRelation {
@@ -461,41 +488,52 @@ pub struct SqliteIntrospector {
 }
 
 impl SqliteIntrospector {
-    pub async fn new(url: &str) -> AnyhowResult<Self> {
+    pub async fn new(url: &str) -> ValkyrinResult<Self> {
         if !sqlx::Sqlite::database_exists(url).await.unwrap_or(false) {
-            sqlx::Sqlite::create_database(url).await?;
+            sqlx::Sqlite::create_database(url).await
+                .map_err(from_sqlx)
+                .map_err(|e| ValkyrinError::Database(format!("Failed to create SQLite database: {}", e)))?;
         }
         let pool = sqlx::Pool::<sqlx::Sqlite>::connect(url)
             .await
-            .context("Failed to connect to SQLite. Is the URL correct?")?;
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Database(format!("Failed to connect to SQLite: {}", e)))?;
         Ok(Self { pool })
     }
 }
 
 #[async_trait]
 impl DatabaseIntrospector for SqliteIntrospector {
-    async fn fetch_schema(&self) -> AnyhowResult<Vec<Entity>> {
+    async fn fetch_schema(&self) -> ValkyrinResult<Vec<Entity>> {
         let tables_query =
             r#"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"#;
-        let table_rows = sqlx::query(tables_query).fetch_all(&self.pool).await?;
+        let table_rows = sqlx::query(tables_query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch SQLite tables: {}", e)))?;
 
         let mut entities: Vec<Entity> = Vec::new();
 
         // Validate table name against identifier regex to prevent SQL injection
-        let identifier_regex = regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$").unwrap();
+        let identifier_regex = regex::Regex::new(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
+            .map_err(|e| ValkyrinError::Internal(format!("Regex compilation failed: {}", e)))?;
 
         for table_row in table_rows {
             let table_name: String = table_row.get("name");
             
             if !identifier_regex.is_match(&table_name) {
-                return Err(anyhow::anyhow!(
-                    "Invalid table name '{}': does not match identifier pattern",
-                    table_name
+                return Err(ValkyrinError::Schema(
+                    format!("Invalid table name '{}': does not match identifier pattern", table_name)
                 ));
             }
             
             let columns_query = format!("PRAGMA table_info({});", table_name);
-            let column_rows = sqlx::query(&columns_query).fetch_all(&self.pool).await?;
+            let column_rows = sqlx::query(&columns_query)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(from_sqlx)
+                .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch SQLite columns for {}: {}", table_name, e)))?;
 
             let mut fields: Vec<Field> = Vec::new();
 
@@ -556,16 +594,24 @@ impl DatabaseIntrospector for SqliteIntrospector {
         Ok(entities)
     }
 
-    async fn fetch_relations(&self) -> AnyhowResult<Vec<DetectedRelation>> {
+    async fn fetch_relations(&self) -> ValkyrinResult<Vec<DetectedRelation>> {
         let tables_query =
             r#"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';"#;
-        let table_rows = sqlx::query(tables_query).fetch_all(&self.pool).await?;
+        let table_rows = sqlx::query(tables_query)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch SQLite tables for relations: {}", e)))?;
 
         let mut relations = Vec::new();
         for table_row in table_rows {
             let table_name: String = table_row.get("name");
             let fk_query = format!("PRAGMA foreign_key_list({});", table_name);
-            let fk_rows = sqlx::query(&fk_query).fetch_all(&self.pool).await?;
+            let fk_rows = sqlx::query(&fk_query)
+                .fetch_all(&self.pool)
+                .await
+                .map_err(from_sqlx)
+                .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch SQLite FKs for {}: {}", table_name, e)))?;
 
             for row in fk_rows {
                 let from_col: String = row.get("from");

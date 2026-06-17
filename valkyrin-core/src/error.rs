@@ -101,3 +101,15 @@ pub fn from_serde_json(err: serde_json::Error) -> ValkyrinError {
 pub fn from_sqlx(err: sqlx::Error) -> ValkyrinError {
     ValkyrinError::Database(err.to_string())
 }
+
+impl From<std::io::Error> for ValkyrinError {
+    fn from(err: std::io::Error) -> Self {
+        ValkyrinError::Io(err.to_string())
+    }
+}
+
+impl From<sqlx::Error> for ValkyrinError {
+    fn from(err: sqlx::Error) -> Self {
+        ValkyrinError::Database(err.to_string())
+    }
+}
