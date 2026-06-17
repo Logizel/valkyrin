@@ -1362,10 +1362,8 @@ impl SyncEngine {
                     .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire PostgreSQL connection: {}", e)))?;
                 pg_advisory_lock(&mut conn, 0x76616C6B7972696E).await
-                    .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire advisory lock: {}", e)))?;
                 create_migration_table(&mut conn).await
-                    .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
 
                 // Get already applied migrations from the database (use pool as executor)
@@ -1461,10 +1459,8 @@ impl SyncEngine {
                     .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire MySQL connection: {}", e)))?;
                 mysql_lock(&mut conn, "valkyrin_migration_lock").await
-                    .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire MySQL lock: {}", e)))?;
                 create_migration_table_mysql(&mut conn).await
-                    .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
 
                 // Get already applied migrations from the database (use pool as executor)
@@ -1552,7 +1548,6 @@ impl SyncEngine {
             DatabaseType::SQLite => {
                 // Create connection pool and acquire lock
                 sqlite_lock(db_url).await
-                    .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire SQLite lock: {}", e)))?;
                 let pool = sqlx::Pool::<sqlx::Sqlite>::connect(db_url)
                     .await
@@ -1563,7 +1558,6 @@ impl SyncEngine {
                     .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire SQLite connection: {}", e)))?;
                 create_migration_table_sqlite(&mut conn).await
-                    .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
 
                 // Get already applied migrations from the database (use pool as executor)
@@ -1657,7 +1651,7 @@ impl SyncEngine {
         explicit_db_type: Option<&str>,
         steps: usize,
         dry_run: bool,
-    ) -> AnyhowResult<()> {
+    ) -> ValkyrinResult<()> {
         // Determine DB type
         let db_type = if let Some(db_type_str) = explicit_db_type {
             match db_type_str.to_lowercase().as_str() {
@@ -1665,9 +1659,8 @@ impl SyncEngine {
                 "mysql" => DatabaseType::MySQL,
                 "sqlite" => DatabaseType::SQLite,
                 _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.",
-                        db_type_str
+                    return Err(ValkyrinError::Config(
+                        format!("Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.", db_type_str)
                     ))
                 }
             }
@@ -1682,7 +1675,8 @@ impl SyncEngine {
             DatabaseType::SQLite => "sqlite",
         };
         let migration_dir = std::path::Path::new("migrations");
-        let mut candidates: Vec<std::path::PathBuf> = fs::read_dir(migration_dir)?
+        let mut candidates: Vec<std::path::PathBuf> = fs::read_dir(migration_dir)
+            .map_err(|e| ValkyrinError::Io(format!("Failed to read migrations directory: {}", e)))?
             .filter_map(|e| e.ok())
             .map(|e| e.path())
             .filter(|p| {
@@ -1712,14 +1706,16 @@ impl SyncEngine {
 
         for path in to_rollback {
             println!("⏪ Rolling back migration: {}", path.display());
-            let content = fs::read_to_string(&path)?;
+            let content = fs::read_to_string(&path)
+                .map_err(|e| ValkyrinError::Io(format!("Failed to read migration file {}: {}", path.display(), e)))?;
 
             // Parse the migration file to extract DOWN SQL
             // Migration files have format: -- DOWN SQL at the end or separate file
             // For now, we'll look for a corresponding .down.sql file or parse -- DOWN: comments
             let down_path = path.with_extension("down.sql");
             let down_sql = if down_path.exists() {
-                fs::read_to_string(&down_path)?
+                fs::read_to_string(&down_path)
+                    .map_err(|e| ValkyrinError::Io(format!("Failed to read down migration file {}: {}", down_path.display(), e)))?
             } else {
                 // Try to extract DOWN SQL from comments in the migration file
                 let mut down_stmts = Vec::new();
@@ -1781,7 +1777,7 @@ impl SyncEngine {
         explicit_db_type: Option<&str>,
         confirm: bool,
         dry_run: bool,
-    ) -> AnyhowResult<()> {
+    ) -> ValkyrinResult<()> {
         // Determine DB type
         let db_type = if let Some(db_type_str) = explicit_db_type {
             match db_type_str.to_lowercase().as_str() {
@@ -1789,9 +1785,8 @@ impl SyncEngine {
                 "mysql" => DatabaseType::MySQL,
                 "sqlite" => DatabaseType::SQLite,
                 _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.",
-                        db_type_str
+                    return Err(ValkyrinError::Config(
+                        format!("Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.", db_type_str)
                     ))
                 }
             }
@@ -1831,7 +1826,8 @@ impl SyncEngine {
         let local_file = fs::read_to_string("schema.vdb.json")
             .unwrap_or_else(|_| r#"{"tables":[],"relations":[]}"#.to_string());
         let payload: crate::canvas::CanvasPayload =
-            serde_json::from_str(&local_file).context("Failed to parse local schema.vdb.json")?;
+            serde_json::from_str(&local_file)
+                .map_err(|e| ValkyrinError::Config(format!("Failed to parse local schema.vdb.json: {}", e)))?;
         let canvas_ir = payload.to_ir();
 
         // Compute diff from canvas to DB (swap arguments)
@@ -1928,7 +1924,7 @@ impl SyncEngine {
     }
 
     /// Checks synchronization status between canvas and database (dry-run diff).
-    pub async fn check_sync(db_url: &str, explicit_db_type: Option<&str>) -> AnyhowResult<()> {
+    pub async fn check_sync(db_url: &str, explicit_db_type: Option<&str>) -> ValkyrinResult<()> {
         // Reuse synchronize_database in DryRun mode but suppress file writes
         Self::synchronize_database(db_url, explicit_db_type, SyncMode::DryRun).await
     }
@@ -1939,7 +1935,7 @@ impl SyncEngine {
         db_url: &str,
         explicit_db_type: Option<&str>,
         mode: SyncMode,
-    ) -> AnyhowResult<()> {
+    ) -> ValkyrinResult<()> {
         println!("🔌 Connecting to database...");
 
         let db_type = if let Some(db_type_str) = explicit_db_type {
@@ -1948,9 +1944,8 @@ impl SyncEngine {
                 "mysql" => DatabaseType::MySQL,
                 "sqlite" => DatabaseType::SQLite,
                 _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.",
-                        db_type_str
+                    return Err(ValkyrinError::Config(
+                        format!("Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.", db_type_str)
                     ))
                 }
             }
@@ -1997,7 +1992,8 @@ impl SyncEngine {
         let local_file = fs::read_to_string("schema.vdb.json")
             .unwrap_or_else(|_| r#"{"tables":[],"relations":[]}"#.to_string());
         let mut payload: crate::canvas::CanvasPayload =
-            serde_json::from_str(&local_file).context("Failed to parse local schema.vdb.json")?;
+            serde_json::from_str(&local_file)
+                .map_err(|e| ValkyrinError::Config(format!("Failed to parse local schema.vdb.json: {}", e)))?;
 
         let local_ir = payload.to_ir();
 

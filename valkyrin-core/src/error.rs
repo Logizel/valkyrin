@@ -113,3 +113,9 @@ impl From<sqlx::Error> for ValkyrinError {
         ValkyrinError::Database(err.to_string())
     }
 }
+
+impl From<serde_json::Error> for ValkyrinError {
+    fn from(err: serde_json::Error) -> Self {
+        ValkyrinError::Parse(err.to_string())
+    }
+}
