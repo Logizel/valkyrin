@@ -124,6 +124,93 @@ pub fn compile_blueprint() -> Result<()> {
         );
     }
 
+    // Phase 3.1: Auto-generate junction entities for ManyToMany relations
+    let mut junction_entities = Vec::new();
+    let connections = ir_graph.connections.clone();
+    for conn in &connections {
+        if conn.multiplicity == crate::ir::RelationType::ManyToMany {
+            // Find source and target entities
+            let source_entity = ir_graph.entities.iter().find(|e| e.id == conn.source_entity_id);
+            let target_entity = ir_graph.entities.iter().find(|e| e.id == conn.target_entity_id);
+            
+            if let (Some(source), Some(target)) = (source_entity, target_entity) {
+                // Create junction table name: alphabetical join (e.g., user_group for User↔Group)
+                let source_name = source.name.to_lowercase();
+                let target_name = target.name.to_lowercase();
+                let junction_name = if source_name < target_name {
+                    format!("{}_{}", source_name, target_name)
+                } else {
+                    format!("{}_{}", target_name, source_name)
+                };
+                
+                // Check if junction entity already exists
+                let junction_exists = ir_graph.entities.iter().any(|e| e.name == junction_name);
+                if junction_exists {
+                    continue;
+                }
+                
+                // Get PK data types from source and target
+                let source_pk_type = source
+                    .fields
+                    .iter()
+                    .find(|f| f.constraints.is_primary_key)
+                    .map(|f| f.data_type.clone())
+                    .unwrap_or(crate::ir::DataType::Uuid);
+                let target_pk_type = target
+                    .fields
+                    .iter()
+                    .find(|f| f.constraints.is_primary_key)
+                    .map(|f| f.data_type.clone())
+                    .unwrap_or(crate::ir::DataType::Uuid);
+                
+                // Create junction entity with two FK columns + composite unique index
+                let mut junction_fields = Vec::new();
+                
+                // First FK column
+                let source_fk_name = format!("{}_id", source.name.to_lowercase());
+                junction_fields.push(crate::ir::Field {
+                    id: format!("fk_{}", conn.source_entity_id),
+                    name: source_fk_name.clone(),
+                    data_type: source_pk_type,
+                    constraints: crate::ir::Constraints {
+                        is_primary_key: true,
+                        primary_key_order: Some(0),
+                        is_unique: false,
+                        is_nullable: false,
+                        is_indexed: true,
+                        default_value: None,
+                    },
+                });
+                
+                // Second FK column
+                let target_fk_name = format!("{}_id", target.name.to_lowercase());
+                junction_fields.push(crate::ir::Field {
+                    id: format!("fk_{}", conn.target_entity_id),
+                    name: target_fk_name.clone(),
+                    data_type: target_pk_type,
+                    constraints: crate::ir::Constraints {
+                        is_primary_key: true,
+                        primary_key_order: Some(1),
+                        is_unique: false,
+                        is_nullable: false,
+                        is_indexed: true,
+                        default_value: None,
+                    },
+                });
+                
+                // Create the junction entity
+                junction_entities.push(crate::ir::Entity {
+                    id: format!("junction_{}_{}", conn.source_entity_id, conn.target_entity_id),
+                    name: junction_name,
+                    fields: junction_fields,
+                });
+            }
+        }
+    }
+    
+    // Add junction entities to IR graph
+    ir_graph.entities.extend(junction_entities);
+
     // Map the yaml string and orm to our TargetBackend enum
     let target_backend = match (
         config.language.to_lowercase().as_str(),
