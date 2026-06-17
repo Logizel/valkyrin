@@ -1096,13 +1096,14 @@ impl SyncEngine {
         diff: &DetailedDiff,
         statements: &[String],
         db_type: DatabaseType,
-    ) -> AnyhowResult<Option<String>> {
+    ) -> ValkyrinResult<Option<String>> {
         if statements.is_empty() {
             return Ok(None);
         }
 
         let migration_dir = "migrations";
-        fs::create_dir_all(migration_dir)?;
+        fs::create_dir_all(migration_dir)
+            .map_err(|e| ValkyrinError::Io(format!("Failed to create migrations directory: {}", e)))?;
 
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -1127,7 +1128,8 @@ impl SyncEngine {
             content.push_str("\n\n");
         }
 
-        fs::write(&filename, content)?;
+        fs::write(&filename, content)
+            .map_err(|e| ValkyrinError::Io(format!("Failed to write migration file: {}", e)))?;
         println!("📝 Migration written to: {}", filename);
 
         // Also write DOWN migration file
@@ -1145,7 +1147,8 @@ impl SyncEngine {
                 down_content.push_str("\n\n");
             }
 
-            fs::write(&down_filename, down_content)?;
+            fs::write(&down_filename, down_content)
+                .map_err(|e| ValkyrinError::Io(format!("Failed to write down migration file: {}", e)))?;
             println!("📝 Down migration written to: {}", down_filename);
         }
 
@@ -1157,7 +1160,7 @@ impl SyncEngine {
         db_url: &str,
         db_type: DatabaseType,
         statements: &[String],
-    ) -> AnyhowResult<()> {
+    ) -> ValkyrinResult<()> {
         if statements.is_empty() {
             println!("✅ No migration statements to execute.");
             return Ok(());
@@ -1171,27 +1174,39 @@ impl SyncEngine {
 
         match db_type {
             DatabaseType::PostgreSQL => {
-                let pool = sqlx::Pool::<sqlx::Postgres>::connect(db_url).await?;
+                let pool = sqlx::Pool::<sqlx::Postgres>::connect(db_url)
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to connect to PostgreSQL: {}", e)))?;
                 for stmt in statements {
                     println!("   ▶ {}", stmt);
                     sqlx::query(stmt).execute(&pool).await
-                        .context(format!("Failed to execute: {}", stmt))?;
+                        .map_err(from_sqlx)
+                        .map_err(|e| ValkyrinError::Migration(format!("Failed to execute: {}: {}", stmt, e)))?;
                 }
             }
             DatabaseType::MySQL => {
-                let pool = sqlx::Pool::<sqlx::MySql>::connect(db_url).await?;
+                let pool = sqlx::Pool::<sqlx::MySql>::connect(db_url)
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to connect to MySQL: {}", e)))?;
                 for stmt in statements {
                     println!("   ▶ {}", stmt);
                     sqlx::query(stmt).execute(&pool).await
-                        .context(format!("Failed to execute: {}", stmt))?;
+                        .map_err(from_sqlx)
+                        .map_err(|e| ValkyrinError::Migration(format!("Failed to execute: {}: {}", stmt, e)))?;
                 }
             }
             DatabaseType::SQLite => {
-                let pool = sqlx::Pool::<sqlx::Sqlite>::connect(db_url).await?;
+                let pool = sqlx::Pool::<sqlx::Sqlite>::connect(db_url)
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to connect to SQLite: {}", e)))?;
                 for stmt in statements {
                     println!("   ▶ {}", stmt);
                     sqlx::query(stmt).execute(&pool).await
-                        .context(format!("Failed to execute: {}", stmt))?;
+                        .map_err(from_sqlx)
+                        .map_err(|e| ValkyrinError::Migration(format!("Failed to execute: {}: {}", stmt, e)))?;
                 }
             }
         }
@@ -1284,7 +1299,7 @@ impl SyncEngine {
         db_url: &str,
         explicit_db_type: Option<&str>,
         migration_file: Option<&str>,
-    ) -> AnyhowResult<()> {
+    ) -> ValkyrinResult<()> {
         // Determine DB type
         let db_type = if let Some(db_type_str) = explicit_db_type {
             match db_type_str.to_lowercase().as_str() {
@@ -1292,9 +1307,8 @@ impl SyncEngine {
                 "mysql" => DatabaseType::MySQL,
                 "sqlite" => DatabaseType::SQLite,
                 _ => {
-                    return Err(anyhow::anyhow!(
-                        "Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.",
-                        db_type_str
+                    return Err(ValkyrinError::Config(
+                        format!("Unknown database type: '{}'. Use 'postgres', 'mysql', or 'sqlite'.", db_type_str)
                     ))
                 }
             }
@@ -1313,7 +1327,8 @@ impl SyncEngine {
                 DatabaseType::SQLite => "sqlite",
             };
             let migration_dir = std::path::Path::new("migrations");
-            let mut candidates: Vec<std::path::PathBuf> = fs::read_dir(migration_dir)?
+            let mut candidates: Vec<std::path::PathBuf> = fs::read_dir(migration_dir)
+                .map_err(|e| ValkyrinError::Io(format!("Failed to read migrations directory: {}", e)))?
                 .filter_map(|e| e.ok())
                 .map(|e| e.path())
                 .filter(|p| {
@@ -1338,17 +1353,29 @@ impl SyncEngine {
         match db_type {
             DatabaseType::PostgreSQL => {
                 // Create connection pool and acquire lock
-                let pool = sqlx::Pool::<sqlx::Postgres>::connect(db_url).await?;
-                let mut conn = pool.acquire().await?;
-                pg_advisory_lock(&mut conn, 0x76616C6B7972696E).await?; // 'valkyrin' in hex
-                create_migration_table(&mut conn).await?;
+                let pool = sqlx::Pool::<sqlx::Postgres>::connect(db_url)
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to connect to PostgreSQL: {}", e)))?;
+                let mut conn = pool.acquire()
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to acquire PostgreSQL connection: {}", e)))?;
+                pg_advisory_lock(&mut conn, 0x76616C6B7972696E).await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to acquire advisory lock: {}", e)))?;
+                create_migration_table(&mut conn).await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
 
                 // Get already applied migrations from the database (use pool as executor)
                 let applied_migrations: Vec<MigrationRecord> = sqlx::query_as(
                     "SELECT version, name, checksum, applied_at, success FROM _valkyrin_migrations"
                 )
                 .fetch_all(&pool)
-                .await?;
+                .await
+                .map_err(from_sqlx)
+                .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch applied migrations: {}", e)))?;
                 
                 // Track which migrations have been applied with their checksums
                 let mut applied: HashMap<String, String> = HashMap::new();
@@ -1362,7 +1389,8 @@ impl SyncEngine {
                     let version = file_name.to_string();
                     
                     // Read the migration file first to compute checksum
-                    let sql = fs::read_to_string(&path)?;
+                    let sql = fs::read_to_string(&path)
+                        .map_err(|e| ValkyrinError::Io(format!("Failed to read migration file {}: {}", path.display(), e)))?;
                     let checksum = {
                         let mut hasher = Sha256::new();
                         hasher.update(sql.as_bytes());
@@ -1373,9 +1401,8 @@ impl SyncEngine {
                     if let Some(stored_checksum) = applied.get(&version) {
                         // Validate checksum - reject if migration file was modified after apply
                         if stored_checksum != &checksum {
-                            return Err(anyhow::anyhow!(
-                                "Migration {} has been modified after being applied (checksum mismatch: stored={}, computed={}). Refusing to re-apply.",
-                                file_name, stored_checksum, checksum
+                            return Err(ValkyrinError::Migration(
+                                format!("Migration {} has been modified after being applied (checksum mismatch: stored={}, computed={}). Refusing to re-apply.", file_name, stored_checksum, checksum)
                             ));
                         }
                         println!("⏭️  Migration {} already applied (checksum verified)", file_name);
@@ -1399,7 +1426,9 @@ impl SyncEngine {
                             .bind(&checksum)
                             .bind(true)
                             .execute(&pool)
-                            .await?;
+                            .await
+                            .map_err(from_sqlx)
+                            .map_err(|e| ValkyrinError::Migration(format!("Failed to record migration: {}", e)))?;
                         }
                         Err(e) => {
                             println!("❌  Failed to apply migration: {}", file_name);
@@ -1411,8 +1440,10 @@ impl SyncEngine {
                             .bind(&checksum)
                             .bind(false)
                             .execute(&pool)
-                            .await?;
-                            return Err(anyhow::anyhow!("Migration failed: {}", e));
+                            .await
+                            .map_err(from_sqlx)
+                            .map_err(|e| ValkyrinError::Migration(format!("Failed to record failed migration: {}", e)))?;
+                            return Err(ValkyrinError::Migration(format!("Migration failed: {}", e)));
                         }
                     }
                 }
@@ -1421,17 +1452,29 @@ impl SyncEngine {
             }
             DatabaseType::MySQL => {
                 // Create connection pool and acquire lock
-                let pool = sqlx::Pool::<sqlx::MySql>::connect(db_url).await?;
-                let mut conn = pool.acquire().await?;
-                mysql_lock(&mut conn, "valkyrin_migration_lock").await?;
-                create_migration_table_mysql(&mut conn).await?;
+                let pool = sqlx::Pool::<sqlx::MySql>::connect(db_url)
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to connect to MySQL: {}", e)))?;
+                let mut conn = pool.acquire()
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to acquire MySQL connection: {}", e)))?;
+                mysql_lock(&mut conn, "valkyrin_migration_lock").await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to acquire MySQL lock: {}", e)))?;
+                create_migration_table_mysql(&mut conn).await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
 
                 // Get already applied migrations from the database (use pool as executor)
                 let applied_migrations: Vec<MigrationRecord> = sqlx::query_as(
                     "SELECT version, name, checksum, applied_at, success FROM _valkyrin_migrations"
                 )
                 .fetch_all(&pool)
-                .await?;
+                .await
+                .map_err(from_sqlx)
+                .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch applied migrations: {}", e)))?;
                 
                 // Track which migrations have been applied with their checksums
                 let mut applied: HashMap<String, String> = HashMap::new();
@@ -1445,7 +1488,8 @@ impl SyncEngine {
                     let version = file_name.to_string();
                     
                     // Read the migration file first to compute checksum
-                    let sql = fs::read_to_string(&path)?;
+                    let sql = fs::read_to_string(&path)
+                        .map_err(|e| ValkyrinError::Io(format!("Failed to read migration file {}: {}", path.display(), e)))?;
                     let checksum = {
                         let mut hasher = Sha256::new();
                         hasher.update(sql.as_bytes());
@@ -1456,9 +1500,8 @@ impl SyncEngine {
                     if let Some(stored_checksum) = applied.get(&version) {
                         // Validate checksum - reject if migration file was modified after apply
                         if stored_checksum != &checksum {
-                            return Err(anyhow::anyhow!(
-                                "Migration {} has been modified after being applied (checksum mismatch: stored={}, computed={}). Refusing to re-apply.",
-                                file_name, stored_checksum, checksum
+                            return Err(ValkyrinError::Migration(
+                                format!("Migration {} has been modified after being applied (checksum mismatch: stored={}, computed={}). Refusing to re-apply.", file_name, stored_checksum, checksum)
                             ));
                         }
                         println!("⏭️  Migration {} already applied (checksum verified)", file_name);
@@ -1482,7 +1525,9 @@ impl SyncEngine {
                             .bind(&checksum)
                             .bind(true)
                             .execute(&pool)
-                            .await?;
+                            .await
+                            .map_err(from_sqlx)
+                            .map_err(|e| ValkyrinError::Migration(format!("Failed to record migration: {}", e)))?;
                         }
                         Err(e) => {
                             println!("❌  Failed to apply migration: {}", file_name);
@@ -1494,8 +1539,10 @@ impl SyncEngine {
                             .bind(&checksum)
                             .bind(false)
                             .execute(&pool)
-                            .await?;
-                            return Err(anyhow::anyhow!("Migration failed: {}", e));
+                            .await
+                            .map_err(from_sqlx)
+                            .map_err(|e| ValkyrinError::Migration(format!("Failed to record failed migration: {}", e)))?;
+                            return Err(ValkyrinError::Migration(format!("Migration failed: {}", e)));
                         }
                     }
                 }
@@ -1504,17 +1551,29 @@ impl SyncEngine {
             }
             DatabaseType::SQLite => {
                 // Create connection pool and acquire lock
-                sqlite_lock(db_url).await?;
-                let pool = sqlx::Pool::<sqlx::Sqlite>::connect(db_url).await?;
-                let mut conn = pool.acquire().await?;
-                create_migration_table_sqlite(&mut conn).await?;
+                sqlite_lock(db_url).await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to acquire SQLite lock: {}", e)))?;
+                let pool = sqlx::Pool::<sqlx::Sqlite>::connect(db_url)
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to connect to SQLite: {}", e)))?;
+                let mut conn = pool.acquire()
+                    .await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Database(format!("Failed to acquire SQLite connection: {}", e)))?;
+                create_migration_table_sqlite(&mut conn).await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
 
                 // Get already applied migrations from the database (use pool as executor)
                 let applied_migrations: Vec<MigrationRecord> = sqlx::query_as(
                     "SELECT version, name, checksum, applied_at, success FROM _valkyrin_migrations"
                 )
                 .fetch_all(&pool)
-                .await?;
+                .await
+                .map_err(from_sqlx)
+                .map_err(|e| ValkyrinError::Introspection(format!("Failed to fetch applied migrations: {}", e)))?;
                 
                 // Track which migrations have been applied with their checksums
                 let mut applied: HashMap<String, String> = HashMap::new();
@@ -1528,7 +1587,8 @@ impl SyncEngine {
                     let version = file_name.to_string();
                     
                     // Read the migration file first to compute checksum
-                    let sql = fs::read_to_string(&path)?;
+                    let sql = fs::read_to_string(&path)
+                        .map_err(|e| ValkyrinError::Io(format!("Failed to read migration file {}: {}", path.display(), e)))?;
                     let checksum = {
                         let mut hasher = Sha256::new();
                         hasher.update(sql.as_bytes());
@@ -1539,9 +1599,8 @@ impl SyncEngine {
                     if let Some(stored_checksum) = applied.get(&version) {
                         // Validate checksum - reject if migration file was modified after apply
                         if stored_checksum != &checksum {
-                            return Err(anyhow::anyhow!(
-                                "Migration {} has been modified after being applied (checksum mismatch: stored={}, computed={}). Refusing to re-apply.",
-                                file_name, stored_checksum, checksum
+                            return Err(ValkyrinError::Migration(
+                                format!("Migration {} has been modified after being applied (checksum mismatch: stored={}, computed={}). Refusing to re-apply.", file_name, stored_checksum, checksum)
                             ));
                         }
                         println!("⏭️  Migration {} already applied (checksum verified)", file_name);
@@ -1565,7 +1624,9 @@ impl SyncEngine {
                             .bind(&checksum)
                             .bind(true)
                             .execute(&pool)
-                            .await?;
+                            .await
+                            .map_err(from_sqlx)
+                            .map_err(|e| ValkyrinError::Migration(format!("Failed to record migration: {}", e)))?;
                         }
                         Err(e) => {
                             println!("❌  Failed to apply migration: {}", file_name);
@@ -1577,8 +1638,10 @@ impl SyncEngine {
                             .bind(&checksum)
                             .bind(false)
                             .execute(&pool)
-                            .await?;
-                            return Err(anyhow::anyhow!("Migration failed: {}", e));
+                            .await
+                            .map_err(from_sqlx)
+                            .map_err(|e| ValkyrinError::Migration(format!("Failed to record failed migration: {}", e)))?;
+                            return Err(ValkyrinError::Migration(format!("Migration failed: {}", e)));
                         }
                     }
                 }
