@@ -33,6 +33,8 @@ pub struct CanvasColumn {
     #[serde(default)]
     pub enum_values: Option<Vec<String>>, // For enum type
     #[serde(default)]
+    pub enum_type_name: Option<String>, // For PostgreSQL native enum type name
+    #[serde(default)]
     pub precision: Option<u8>, // For decimal type
     #[serde(default)]
     pub scale: Option<u8>, // For decimal type
@@ -79,7 +81,10 @@ impl CanvasPayload {
                     "datetime" | "timestamp" => DataType::DateTime,
                     "json" | "jsonb" => DataType::Json,
                     "uuid" => DataType::Uuid,
-                    "enum" => DataType::Enum(col.enum_values.clone().unwrap_or_default()),
+                    "enum" => DataType::Enum {
+                        values: col.enum_values.clone().unwrap_or_default(),
+                        type_name: col.enum_type_name.clone(),
+                    },
                     _ => DataType::Text, // Safe fallback
                 };
 

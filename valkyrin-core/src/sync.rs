@@ -204,7 +204,7 @@ impl DatabaseIntrospector for PostgresIntrospector {
 
             let mapped_type = if db_type == "USER-DEFINED" {
                 // PostgreSQL enum – fetch enum labels using the udt_name
-                let enum_vals: Vec<String> = if let Some(type_name) = udt_name {
+                let enum_vals: Vec<String> = if let Some(ref type_name) = udt_name {
                     let enum_query = r#"SELECT enumlabel FROM pg_enum WHERE enumtypid = (SELECT oid FROM pg_type WHERE typname = $1)"#;
                     
                     sqlx::query(enum_query)
@@ -219,7 +219,10 @@ impl DatabaseIntrospector for PostgresIntrospector {
                 } else {
                     vec![]
                 };
-                DataType::Enum(enum_vals)
+                DataType::Enum {
+                    values: enum_vals,
+                    type_name: udt_name.clone(),
+                }
             } else {
                 match db_type.as_str() {
                     "character varying" | "text" => DataType::String { max_length: None },
@@ -395,7 +398,10 @@ impl DatabaseIntrospector for MysqlIntrospector {
                     .split(',')
                     .map(|s| s.trim().trim_matches('\'').to_string())
                     .collect();
-                DataType::Enum(enum_vals)
+                DataType::Enum {
+                    values: enum_vals,
+                    type_name: None,
+                }
             } else {
                 match column_type.as_str() {
                     s if s.starts_with("varchar") || s.starts_with("char") => {
@@ -899,7 +905,7 @@ impl SyncEngine {
             DataType::DateTime => "datetime".to_string(),
             DataType::Json => "json".to_string(),
             DataType::Uuid => "uuid".to_string(),
-            DataType::Enum(vals) => format!("enum({})", vals.join("|")),
+            DataType::Enum { values, type_name: _ } => format!("enum({})", values.join("|")),
         }
     }
 
@@ -1262,13 +1268,13 @@ impl SyncEngine {
                 DatabaseType::MySQL => "CHAR(36)".to_string(),
                 DatabaseType::SQLite => "TEXT".to_string(),
             },
-            DataType::Enum(vals) => match db_type {
+            DataType::Enum { values, type_name } => match db_type {
                 DatabaseType::PostgreSQL => {
-                    // PostgreSQL: CREATE TYPE would be needed; here we just use VARCHAR
-                    "VARCHAR(255)".to_string()
+                    // PostgreSQL: use native enum type name if available
+                    type_name.clone().unwrap_or_else(|| "VARCHAR(255)".to_string())
                 }
                 DatabaseType::MySQL => {
-                    format!("ENUM('{}')", vals.join("','"))
+                    format!("ENUM('{}')", values.join("','"))
                 }
                 DatabaseType::SQLite => "TEXT".to_string(),
             },
@@ -2073,7 +2079,7 @@ impl SyncEngine {
                         DataType::DateTime => "datetime",
                         DataType::Json => "json",
                         DataType::Uuid => "uuid",
-                        DataType::Enum(_) => "enum",
+                        DataType::Enum { values: _, type_name: _ } => "enum",
                     };
 
                     canvas_columns.push(crate::canvas::CanvasColumn {
@@ -2086,7 +2092,11 @@ impl SyncEngine {
                         is_indexed: field.constraints.is_indexed,
                         default_value: field.constraints.default_value.clone(),
                         enum_values: match &field.data_type {
-                            DataType::Enum(values) => Some(values.clone()),
+                            DataType::Enum { values, .. } => Some(values.clone()),
+                            _ => None,
+                        },
+                        enum_type_name: match &field.data_type {
+                            DataType::Enum { type_name, .. } => type_name.clone(),
                             _ => None,
                         },
                         precision: match &field.data_type {

@@ -111,6 +111,7 @@ async fn run_db_test(db_url: &str) -> Result<()> {
             is_indexed: false,
             default_value: None,
             enum_values: None,
+            enum_type_name: None,
             precision: None,
             scale: None,
             max_length: None,

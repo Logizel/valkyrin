@@ -47,7 +47,7 @@ impl LanguageDriver for GoGormDriver {
             DataType::DateTime => "time.Time",
             DataType::Json => "datatypes.JSON",
             DataType::Uuid => "uuid.UUID",
-            DataType::Enum(_) => "string", // Go enums stored as strings, constants generated separately
+            DataType::Enum { values: _, type_name: _ } => "string", // Go enums stored as strings, constants generated separately
         };
 
         if is_nullable {
@@ -90,12 +90,12 @@ impl LanguageDriver for GoGormDriver {
         let enum_fields: Vec<&Field> = entity
             .fields
             .iter()
-            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .filter(|f| matches!(f.data_type, DataType::Enum { values: _, type_name: _ }))
             .collect();
 
         if !enum_fields.is_empty() {
             for field in &enum_fields {
-                if let DataType::Enum(values) = &field.data_type {
+                if let DataType::Enum { values, type_name: _ } = &field.data_type {
                     let const_name = format!("{}Status", capitalize_first(&field.name));
                     output.push_str(&format!("type {} string\n\n", const_name));
                     output.push_str("const (\n");
@@ -284,7 +284,7 @@ impl LanguageDriver for PythonSqlModelDriver {
             DataType::DateTime => "datetime",
             DataType::Json => "dict",
             DataType::Uuid => "UUID",
-            DataType::Enum(_) => "str",
+            DataType::Enum { values: _, type_name: _ } => "str",
         };
 
         if is_nullable {
@@ -306,11 +306,11 @@ impl LanguageDriver for PythonSqlModelDriver {
         let enum_fields: Vec<&Field> = entity
             .fields
             .iter()
-            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .filter(|f| matches!(f.data_type, DataType::Enum { values: _, type_name: _ }))
             .collect();
 
         for field in &enum_fields {
-            if let DataType::Enum(values) = &field.data_type {
+            if let DataType::Enum { values, type_name: _ } = &field.data_type {
                 let enum_name = format!("{}Enum", capitalize_first(&field.name));
                 output.push_str(&format!("class {}(str, Enum):\n", enum_name));
                 for val in values {
@@ -331,7 +331,7 @@ impl LanguageDriver for PythonSqlModelDriver {
         let _has_composite_pk = pk_fields.len() > 1;
 
         for field in &entity.fields {
-            let py_type = if let DataType::Enum(_) = &field.data_type {
+            let py_type = if let DataType::Enum { values: _, type_name: _ } = &field.data_type {
                 let enum_name = format!("{}Enum", capitalize_first(&field.name));
                 if field.constraints.is_nullable {
                     format!("Optional[{}]", enum_name)
@@ -505,7 +505,7 @@ impl LanguageDriver for GoEntDriver {
             DataType::DateTime => "time.Time",
             DataType::Json => "json.RawMessage",
             DataType::Uuid => "uuid.UUID",
-            DataType::Enum(_) => "string",
+            DataType::Enum { values: _, type_name: _ } => "string",
         };
 
         if is_nullable {
@@ -539,12 +539,12 @@ impl LanguageDriver for GoEntDriver {
         let enum_fields: Vec<&Field> = entity
             .fields
             .iter()
-            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .filter(|f| matches!(f.data_type, DataType::Enum { values: _, type_name: _ }))
             .collect();
 
         if !enum_fields.is_empty() {
             for field in &enum_fields {
-                if let DataType::Enum(values) = &field.data_type {
+                if let DataType::Enum { values, type_name: _ } = &field.data_type {
                     let const_name = format!("{}Status", capitalize_first(&field.name));
                     output.push_str(&format!("type {} string\n\n", const_name));
                     output.push_str("const (\n");
@@ -576,7 +576,7 @@ impl LanguageDriver for GoEntDriver {
             let _field_name = capitalize_first(&field.name);
 
             let ent_field_type = match field.data_type {
-                DataType::Enum(_) => "String",
+                DataType::Enum { values: _, type_name: _ } => "String",
                 DataType::String { .. } | DataType::Text => "String",
                 DataType::Integer(_) => "Int",
                 DataType::Float => "Float64",
@@ -738,7 +738,7 @@ impl LanguageDriver for PythonSqlAlchemyDriver {
             DataType::DateTime => "DateTime".to_string(),
             DataType::Json => "JSON".to_string(),
             DataType::Uuid => "Uuid".to_string(),
-            DataType::Enum(values) => {
+            DataType::Enum { values, type_name: _ } => {
                 let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
                 format!("Enum({})", enum_vals)
             },
@@ -925,7 +925,7 @@ impl LanguageDriver for RustDieselDriver {
             DataType::DateTime => "chrono::NaiveDateTime".to_string(),
             DataType::Json => "serde_json::Value".to_string(),
             DataType::Uuid => "uuid::Uuid".to_string(),
-            DataType::Enum(_) => "String".to_string(), // Placeholder, actual type determined in generate_model
+            DataType::Enum { values: _, type_name: _ } => "String".to_string(), // Placeholder, actual type determined in generate_model
         }
     }
 
@@ -941,11 +941,11 @@ impl LanguageDriver for RustDieselDriver {
         let enum_fields: Vec<&Field> = entity
             .fields
             .iter()
-            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .filter(|f| matches!(f.data_type, DataType::Enum { values: _, type_name: _ }))
             .collect();
 
         for field in &enum_fields {
-            if let DataType::Enum(values) = &field.data_type {
+            if let DataType::Enum { values, type_name: _ } = &field.data_type {
                 let enum_name = format!("{}Enum", capitalize_first(&field.name));
                 output.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, diesel::deserialize::FromSqlRow, diesel::serialize::ToSql)]\n");
                 output.push_str("#[diesel(sql_type = Text)]\n");
@@ -990,7 +990,7 @@ impl LanguageDriver for RustDieselDriver {
 
         for field in &entity.fields {
             let rust_type = match &field.data_type {
-                DataType::Enum(_) => format!("{}Enum", capitalize_first(&field.name)),
+                DataType::Enum { values: _, type_name: _ } => format!("{}Enum", capitalize_first(&field.name)),
                 _ => self.map_data_type(&field.data_type, field.constraints.is_nullable),
             };
 
@@ -1130,7 +1130,7 @@ impl LanguageDriver for RustSeaOrmDriver {
             DataType::DateTime => "DateTime".to_string(),
             DataType::Json => "Json".to_string(),
             DataType::Uuid => "Uuid".to_string(),
-            DataType::Enum(_) => "String".to_string(), // Placeholder, actual type determined in generate_model
+            DataType::Enum { values: _, type_name: _ } => "String".to_string(), // Placeholder, actual type determined in generate_model
         };
 
         if is_nullable {
@@ -1152,11 +1152,11 @@ impl LanguageDriver for RustSeaOrmDriver {
         let enum_fields: Vec<&Field> = entity
             .fields
             .iter()
-            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .filter(|f| matches!(f.data_type, DataType::Enum { values: _, type_name: _ }))
             .collect();
 
         for field in &enum_fields {
-            if let DataType::Enum(values) = &field.data_type {
+            if let DataType::Enum { values, type_name: _ } = &field.data_type {
                 let enum_name = format!("{}Enum", capitalize_first(&field.name));
                 output.push_str("#[derive(Debug, Clone, PartialEq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]\n");
                 output.push_str(&format!("#[sea_orm(rs_type = \"String\", db_type = \"Enum\", enum_name = \"{}\")]\n", field.name));
@@ -1175,7 +1175,7 @@ impl LanguageDriver for RustSeaOrmDriver {
         output.push_str("pub struct Model {\n");
 
         for field in &entity.fields {
-            let sea_type = if let DataType::Enum(_) = &field.data_type {
+            let sea_type = if let DataType::Enum { values: _, type_name: _ } = &field.data_type {
                 let enum_name = format!("{}Enum", capitalize_first(&field.name));
                 if field.constraints.is_nullable {
                     format!("Option<{}>", enum_name)
@@ -1337,7 +1337,7 @@ impl LanguageDriver for JavaScriptSequelizeDriver {
             DataType::DateTime => "DataTypes.DATE".to_string(),
             DataType::Json => "DataTypes.JSON".to_string(),
             DataType::Uuid => "DataTypes.UUID".to_string(),
-            DataType::Enum(values) => {
+            DataType::Enum { values, type_name: _ } => {
                 let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
                 format!("DataTypes.ENUM({})", enum_vals)
             },
@@ -1522,7 +1522,7 @@ impl LanguageDriver for JavaScriptTypeOrmDriver {
             DataType::DateTime => "timestamp".to_string(),
             DataType::Json => "json".to_string(),
             DataType::Uuid => "uuid".to_string(),
-            DataType::Enum(values) => {
+            DataType::Enum { values, type_name: _ } => {
                 let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
                 format!("enum({})", enum_vals)
             },
@@ -1586,7 +1586,7 @@ impl LanguageDriver for JavaScriptTypeOrmDriver {
                     DataType::Boolean => "boolean".to_string(),
                     DataType::Integer(_) => "number".to_string(),
                     DataType::Float | DataType::Decimal { .. } => "number".to_string(),
-                    DataType::Enum(_) => format!("{}Enum", capitalize_first(&field.name)),
+                    DataType::Enum { values: _, type_name: _ } => format!("{}Enum", capitalize_first(&field.name)),
                     _ => "string".to_string(),
                 };
 
@@ -1598,12 +1598,12 @@ impl LanguageDriver for JavaScriptTypeOrmDriver {
         let enum_fields: Vec<&Field> = entity
             .fields
             .iter()
-            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .filter(|f| matches!(f.data_type, DataType::Enum { values: _, type_name: _ }))
             .collect();
 
         if !enum_fields.is_empty() {
             for field in &enum_fields {
-                if let DataType::Enum(values) = &field.data_type {
+                if let DataType::Enum { values, type_name: _ } = &field.data_type {
                     let enum_name = format!("{}Enum", capitalize_first(&field.name));
                     output.push_str(&format!("export enum {} {{\n", enum_name));
                     for val in values {
@@ -1742,7 +1742,7 @@ impl LanguageDriver for TypeScriptPrismaDriver {
             DataType::DateTime => "DateTime".to_string(),
             DataType::Json => "Json".to_string(),
             DataType::Uuid => "String @id @default(uuid())".to_string(),
-            DataType::Enum(values) => {
+            DataType::Enum { values, type_name: _ } => {
                 capitalize_first(
                     values.first().map(|v| v.as_str()).unwrap_or("Status")
                 )
@@ -1760,12 +1760,12 @@ impl LanguageDriver for TypeScriptPrismaDriver {
         let enum_fields: Vec<&Field> = entity
             .fields
             .iter()
-            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .filter(|f| matches!(f.data_type, DataType::Enum { values: _, type_name: _ }))
             .collect();
 
         if !enum_fields.is_empty() {
             for field in &enum_fields {
-                if let DataType::Enum(values) = &field.data_type {
+                if let DataType::Enum { values, type_name: _ } = &field.data_type {
                     let enum_name = capitalize_first(&field.name);
                     output.push_str(&format!("enum {} {{\n", enum_name));
                     for val in values {
@@ -1789,7 +1789,7 @@ impl LanguageDriver for TypeScriptPrismaDriver {
         for field in &entity.fields {
             let prisma_type = if field.constraints.is_primary_key && matches!(field.data_type, DataType::Uuid) && !has_composite_pk {
                 "String @id @default(uuid())".to_string()
-            } else if let DataType::Enum(_) = &field.data_type {
+            } else if let DataType::Enum { values: _, type_name: _ } = &field.data_type {
                 let enum_name = capitalize_first(&field.name).to_string();
                 if field.constraints.is_nullable {
                     format!("{}?", enum_name)
@@ -1997,7 +1997,7 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
             DataType::DateTime => "timestamp".to_string(),
             DataType::Json => "json".to_string(),
             DataType::Uuid => "uuid".to_string(),
-            DataType::Enum(values) => {
+            DataType::Enum { values, type_name: _ } => {
                 let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
                 format!("enum({})", enum_vals)
             },
@@ -2057,11 +2057,11 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
                 }
                 output.push_str("  })\n");
 
-                let ts_type = match field.data_type {
+                let ts_type = match &field.data_type {
                     DataType::Boolean => "boolean".to_string(),
                     DataType::Integer(_) => "number".to_string(),
                     DataType::Float | DataType::Decimal { .. } => "number".to_string(),
-                    DataType::Enum(_) => format!("{}Enum", capitalize_first(&field.name)),
+                    DataType::Enum { values: _, type_name: _ } => format!("{}Enum", capitalize_first(&field.name)),
                     _ => "string".to_string(),
                 };
 
@@ -2072,12 +2072,12 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
         let enum_fields: Vec<&Field> = entity
             .fields
             .iter()
-            .filter(|f| matches!(f.data_type, DataType::Enum(_)))
+            .filter(|f| matches!(f.data_type, DataType::Enum { values: _, type_name: _ }))
             .collect();
 
         if !enum_fields.is_empty() {
             for field in &enum_fields {
-                if let DataType::Enum(values) = &field.data_type {
+                if let DataType::Enum { values, type_name: _ } = &field.data_type {
                     let enum_name = format!("{}Enum", capitalize_first(&field.name));
                     output.push_str(&format!("export enum {} {{\n", enum_name));
                     for val in values {

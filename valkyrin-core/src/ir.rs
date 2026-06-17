@@ -12,7 +12,7 @@ pub enum DataType {
     DateTime,
     Json,
     Uuid,
-    Enum(Vec<String>),
+    Enum { values: Vec<String>, type_name: Option<String> },
 }
 
 /// Defines the memory size footprint of an integer.

@@ -74,7 +74,7 @@ impl ValidationRule {
             }
             ValidationRule::EnumHasValues => {
                 for field in &entity.fields {
-                    if let DataType::Enum(values) = &field.data_type {
+                    if let DataType::Enum { values, type_name: _ } = &field.data_type {
                         if values.is_empty() {
                             return Some(format!(
                                 "Entity '{}': enum field '{}' must have at least one value",

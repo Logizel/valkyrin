@@ -66,7 +66,10 @@ use valkyrin_core::ir::{DataType, Entity, Field, IntSize, Constraints};
             Field {
                 id: uuid::Uuid::new_v4().to_string(),
                 name: "status".to_string(),
-                data_type: DataType::Enum(vec!["active".to_string(), "inactive".to_string()]),
+                data_type: DataType::Enum {
+                    values: vec!["active".to_string(), "inactive".to_string()],
+                    type_name: None,
+                },
                 constraints: Constraints {
                     is_primary_key: false,
                     primary_key_order: None,

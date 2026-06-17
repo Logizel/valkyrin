@@ -22,7 +22,7 @@ fn arb_data_type() -> impl Strategy<Value = DataType> {
     let decimal_type = (0u8..=38, 0u8..=38)
         .prop_filter("scale <= precision", |(p, s)| s <= p)
         .prop_map(|(p, s)| DataType::Decimal { precision: p, scale: s });
-    let enum_type = vec(string_regex("[a-z]{3,8}").unwrap(), 1..4).prop_map(DataType::Enum);
+    let enum_type = vec(string_regex("[a-z]{3,8}").unwrap(), 1..4).prop_map(|values| DataType::Enum { values, type_name: None });
     prop_oneof![
         string_type,
         Just(DataType::Text),
