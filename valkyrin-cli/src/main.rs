@@ -2,13 +2,18 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use colored::*;
+use serde_json;
 use std::panic;
+use valkyrin_core::error::{ValkyrinError, ValkyrinResult};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    /// Output errors as JSON for CI/CD parsing
+    #[arg(short, long, global = true)]
+    json: bool,
 }
 
 #[derive(Subcommand)]
@@ -62,6 +67,9 @@ enum Commands {
         /// Override auto-detection: 'postgres', 'mysql', or 'sqlite'
         #[arg(short, long)]
         db_type: Option<String>,
+        /// Subcommand: validate
+        #[command(subcommand)]
+        check_command: Option<CheckCommands>,
     },
     Rollback {
         /// Database connection string (auto-detects type from URL prefix)
@@ -76,6 +84,15 @@ enum Commands {
         /// Preview changes without executing
         #[arg(short = 'n', long)]
         dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum CheckCommands {
+    Validate {
+        /// Enable strict validation (exit code 2 on warnings)
+        #[arg(short, long)]
+        strict: bool,
     },
 }
 
@@ -107,16 +124,32 @@ async fn main() {
     let cli = Cli::parse();
 
     // 2. The Expected Error Boundary
-    if let Err(e) = execute_command(cli.command).await {
-        eprintln!("\n{} {}", "Error:".red().bold(), e);
-        for cause in e.chain().skip(1) {
-            eprintln!("  {} {}", "↳".dimmed(), cause);
+    if let Err(e) = execute_command(cli.command, cli.json).await {
+        if cli.json {
+            // Output as JSON for CI/CD
+            if let Some(valkyrin_err) = e.downcast_ref::<ValkyrinError>() {
+                eprintln!("{}", valkyrin_err.to_json());
+                std::process::exit(valkyrin_err.exit_code());
+            } else {
+                let json_err = serde_json::json!({
+                    "code": "VAL-999",
+                    "message": e.to_string(),
+                    "exit_code": 2,
+                });
+                eprintln!("{}", json_err);
+                std::process::exit(2);
+            }
+        } else {
+            eprintln!("\n{} {}", "Error:".red().bold(), e);
+            for cause in e.chain().skip(1) {
+                eprintln!("  {} {}", "↳".dimmed(), cause);
+            }
+            std::process::exit(1);
         }
-        std::process::exit(1);
     }
 }
 
-async fn execute_command(command: Commands) -> Result<()> {
+async fn execute_command(command: Commands, _json: bool) -> Result<()> {
     match command {
         Commands::Init => {
             println!("{} Initializing Valkyrin workspace...", "=>".green().bold());
@@ -204,12 +237,26 @@ async fn execute_command(command: Commands) -> Result<()> {
         Commands::Check {
             url,
             db_type,
+            check_command,
         } => {
-            println!(
-                "{} Checking database synchronization status...",
-                "=>".blue().bold()
-            );
-            valkyrin_core::sync::SyncEngine::check_sync(&url, db_type.as_deref()).await?;
+            match check_command {
+                Some(CheckCommands::Validate { strict }) => {
+                    println!(
+                        "{} Validating schema{}...",
+                        "=>".blue().bold(),
+                        if strict { " (strict mode)" } else { "" }
+                    );
+                    valkyrin_core::validate::validate_schema(strict).await?;
+                    println!("{} Schema validation passed!", "=>".green().bold());
+                }
+                None => {
+                    println!(
+                        "{} Checking database synchronization status...",
+                        "=>".blue().bold()
+                    );
+                    valkyrin_core::sync::SyncEngine::check_sync(&url, db_type.as_deref()).await?;
+                }
+            }
         }
         Commands::Rollback {
             url,
