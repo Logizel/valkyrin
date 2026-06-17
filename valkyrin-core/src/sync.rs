@@ -62,6 +62,12 @@ pub enum ColumnChange {
         before: Option<String>,
         after: Option<String>,
     },
+    /// PostgreSQL enum type was added or values were added
+    EnumTypeChanged {
+        name: String,
+        type_name: String,
+        added_values: Vec<String>,
+    },
 }
 
 /// Per-table diff: which columns were added/removed/modified
@@ -719,13 +725,40 @@ impl SyncEngine {
                     adds.push(live_field.clone());
                 }
                 Some(local_field) => {
-                    // Compare types
+                    // Compare types - special handling for PostgreSQL enums
                     if local_field.data_type != live_field.data_type {
-                        changes.push(ColumnChange::TypeChanged {
-                            name: live_field.name.clone(),
-                            from: local_field.data_type.clone(),
-                            to: live_field.data_type.clone(),
-                        });
+                        // Check if both are enums with same type_name (PostgreSQL native enum)
+                        let is_enum_type_change = match (&local_field.data_type, &live_field.data_type) {
+                            (DataType::Enum { type_name: Some(local_type), values: local_vals },
+                             DataType::Enum { type_name: Some(live_type), values: live_vals }) => {
+                                local_type == live_type && local_vals != live_vals
+                            }
+                            _ => false,
+                        };
+                        
+                        if is_enum_type_change {
+                            // Extract added enum values
+                            if let (DataType::Enum { values: local_vals, .. }, DataType::Enum { values: live_vals, type_name: Some(live_type) }) = 
+                                (&local_field.data_type, &live_field.data_type) {
+                                let added_values: Vec<String> = live_vals.iter()
+                                    .filter(|v| !local_vals.contains(*v))
+                                    .cloned()
+                                    .collect();
+                                if !added_values.is_empty() {
+                                    changes.push(ColumnChange::EnumTypeChanged {
+                                        name: live_field.name.clone(),
+                                        type_name: live_type.clone(),
+                                        added_values,
+                                    });
+                                }
+                            }
+                        } else {
+                            changes.push(ColumnChange::TypeChanged {
+                                name: live_field.name.clone(),
+                                from: local_field.data_type.clone(),
+                                to: live_field.data_type.clone(),
+                            });
+                        }
                     }
                     // Compare nullable
                     if local_field.constraints.is_nullable != live_field.constraints.is_nullable {
@@ -879,6 +912,12 @@ impl SyncEngine {
                                 name, b, a
                             ));
                         }
+                        ColumnChange::EnumTypeChanged { name, type_name, added_values } => {
+                            report.push_str(&format!(
+                                "         ~ {} enum type '{}' added values: {}\n",
+                                name, type_name, added_values.join(", ")
+                            ));
+                        }
                     }
                 }
             }
@@ -920,6 +959,31 @@ impl SyncEngine {
         // DROP tables that were removed from canvas
         for table_name in &diff.removed_tables {
             statements.push(format!("DROP TABLE IF EXISTS \"{}\";", table_name));
+        }
+
+        // Collect PostgreSQL enum CREATE TYPE statements (must run before table creation)
+        if db_type == DatabaseType::PostgreSQL {
+            for entity in diff.new_tables.iter() {
+                for field in &entity.fields {
+                    if let DataType::Enum { values, type_name: Some(enum_type_name) } = &field.data_type {
+                        if !values.is_empty() {
+                            let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                            statements.push(format!("CREATE TYPE {} AS ENUM ({});", enum_type_name, enum_vals));
+                        }
+                    }
+                }
+            }
+            for td in &diff.modified_tables {
+                for change in &td.changes {
+                    if let ColumnChange::EnumTypeChanged { type_name, added_values, .. } = change {
+                        if !added_values.is_empty() {
+                            for val in added_values {
+                                statements.push(format!("ALTER TYPE {} ADD VALUE '{}';", type_name, val));
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // CREATE new tables
