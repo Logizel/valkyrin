@@ -1,4 +1,4 @@
-use anyhow::Context;
+use crate::error::{ValkyrinError, ValkyrinResult, from_sqlx};
 use sqlx::{Connection, Executor, PgConnection, MySqlConnection, SqliteConnection, types::chrono::DateTime, types::chrono::Utc};
 use std::path::Path;
 use tokio::fs;
@@ -16,7 +16,7 @@ pub struct MigrationRecord {
 /// Creates the migration history table if it doesn't exist (PostgreSQL)
 pub async fn create_migration_table(
     conn: &mut PgConnection,
-) -> Result<(), anyhow::Error> {
+) -> ValkyrinResult<()> {
     conn.execute(
         r#"
         CREATE TABLE IF NOT EXISTS _valkyrin_migrations (
@@ -29,14 +29,15 @@ pub async fn create_migration_table(
         "#
     )
     .await
-    .context("Failed to create migration table")?;
+    .map_err(from_sqlx)
+    .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
     Ok(())
 }
 
 /// Creates the migration history table if it doesn't exist (MySQL)
 pub async fn create_migration_table_mysql(
     conn: &mut MySqlConnection,
-) -> Result<(), anyhow::Error> {
+) -> ValkyrinResult<()> {
     conn.execute(
         r#"
         CREATE TABLE IF NOT EXISTS _valkyrin_migrations (
@@ -49,14 +50,15 @@ pub async fn create_migration_table_mysql(
         "#
     )
     .await
-    .context("Failed to create migration table")?;
+    .map_err(from_sqlx)
+    .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
     Ok(())
 }
 
 /// Creates the migration history table if it doesn't exist (SQLite)
 pub async fn create_migration_table_sqlite(
     conn: &mut SqliteConnection,
-) -> Result<(), anyhow::Error> {
+) -> ValkyrinResult<()> {
     conn.execute(
         r#"
         CREATE TABLE IF NOT EXISTS _valkyrin_migrations (
@@ -69,7 +71,8 @@ pub async fn create_migration_table_sqlite(
         "#
     )
     .await
-    .context("Failed to create migration table")?;
+    .map_err(from_sqlx)
+    .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
     Ok(())
 }
 
@@ -77,12 +80,13 @@ pub async fn create_migration_table_sqlite(
 pub async fn pg_advisory_lock(
     conn: &mut PgConnection,
     lock_id: i64,
-) -> Result<(), anyhow::Error> {
+) -> ValkyrinResult<()> {
     sqlx::query("SELECT pg_advisory_lock($1)")
         .bind(lock_id)
         .execute(conn)
         .await
-        .context("Failed to acquire PostgreSQL advisory lock")?;
+        .map_err(from_sqlx)
+        .map_err(|e| ValkyrinError::Database(format!("Failed to acquire PostgreSQL advisory lock: {}", e)))?;
     Ok(())
 }
 
@@ -90,24 +94,25 @@ pub async fn pg_advisory_lock(
 pub async fn mysql_lock(
     conn: &mut MySqlConnection,
     lock_name: &str,
-) -> Result<(), anyhow::Error> {
+) -> ValkyrinResult<()> {
     sqlx::query("SELECT GET_LOCK(?, 30)") // 30 second timeout
         .bind(lock_name)
         .execute(conn)
         .await
-        .context("Failed to acquire MySQL lock")?;
+        .map_err(from_sqlx)
+        .map_err(|e| ValkyrinError::Database(format!("Failed to acquire MySQL lock: {}", e)))?;
     Ok(())
 }
 
 /// SQLite lock mechanism using file locks
-pub async fn sqlite_lock(db_path: &str) -> Result<(), anyhow::Error> {
+pub async fn sqlite_lock(db_path: &str) -> ValkyrinResult<()> {
     let lock_file = Path::new(db_path).with_extension("lock");
     let _file = fs::OpenOptions::new()
         .create(true)
         .write(true)
         .open(lock_file)
         .await
-        .context("Failed to create SQLite lock file")?;
+        .map_err(|e| ValkyrinError::Io(format!("Failed to create SQLite lock file: {}", e)))?;
     // File lock is automatically released when _file goes out of scope
     Ok(())
 }
@@ -116,7 +121,7 @@ pub async fn sqlite_lock(db_path: &str) -> Result<(), anyhow::Error> {
 pub async fn apply_migrations_with_lock(
     db_url: &str,
     migrations: Vec<Migration>,
-) -> Result<(), anyhow::Error> {
+) -> ValkyrinResult<()> {
     // Determine database type from URL
     let db_type = if db_url.starts_with("postgres") {
         DatabaseType::PostgreSQL
@@ -125,18 +130,22 @@ pub async fn apply_migrations_with_lock(
     } else if db_url.starts_with("sqlite") {
         DatabaseType::SQLite
     } else {
-        return Err(anyhow::anyhow!("Unsupported database type"));
+        return Err(ValkyrinError::Database("Unsupported database type".to_string()));
     };
 
     match db_type {
         DatabaseType::PostgreSQL => {
-            let mut conn = PgConnection::connect(db_url).await?;
+            let mut conn = PgConnection::connect(db_url).await
+                .map_err(from_sqlx)
+                .map_err(|e| ValkyrinError::Database(format!("Failed to connect to PostgreSQL: {}", e)))?;
             pg_advisory_lock(&mut conn, 0x76616C6B7972696E).await?; // 'valkyrin' in hex
             create_migration_table(&mut conn).await?;
             // Migration application logic goes here
         }
         DatabaseType::MySQL => {
-            let mut conn = MySqlConnection::connect(db_url).await?;
+            let mut conn = MySqlConnection::connect(db_url).await
+                .map_err(from_sqlx)
+                .map_err(|e| ValkyrinError::Database(format!("Failed to connect to MySQL: {}", e)))?;
             mysql_lock(&mut conn, "valkyrin_migration_lock").await?;
             // MySQL table creation and migration logic
         }
