@@ -1595,9 +1595,14 @@ impl LanguageDriver for JavaScriptTypeOrmDriver {
             DataType::DateTime => "timestamp".to_string(),
             DataType::Json => "json".to_string(),
             DataType::Uuid => "uuid".to_string(),
-            DataType::Enum { values, type_name: _ } => {
-                let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
-                format!("enum({})", enum_vals)
+            DataType::Enum { values, type_name } => {
+                if let Some(enum_type) = type_name {
+                    // Native PostgreSQL enum - use custom type
+                    format!("enum(\"{}\")", enum_type)
+                } else {
+                    let enum_vals = values.iter().map(|v| format!("'{}'", v)).collect::<Vec<_>>().join(", ");
+                    format!("enum({})", enum_vals)
+                }
             },
         }
     }

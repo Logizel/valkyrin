@@ -134,6 +134,7 @@ fn test_all_drivers_generate_output() {
         Box::new(RustDieselDriver),
         Box::new(RustSeaOrmDriver),
         Box::new(JavaScriptSequelizeDriver),
+        Box::new(JavaScriptTypeOrmDriver),
         Box::new(TypeScriptPrismaDriver),
         Box::new(TypeScriptTypeOrmDriver),
     ];
@@ -165,19 +166,21 @@ fn test_native_enum_type_name_emission() {
         Box::new(RustDieselDriver),
         Box::new(RustSeaOrmDriver),
         Box::new(JavaScriptSequelizeDriver),
+        Box::new(JavaScriptTypeOrmDriver),
         Box::new(TypeScriptPrismaDriver),
         Box::new(TypeScriptTypeOrmDriver),
     ];
 
     for driver in drivers.iter() {
+        let ext = driver.file_extension();
         let output = driver.generate_model(&entity);
-        assert!(!output.trim().is_empty(), "Driver {} produced empty output", driver.file_extension());
+        assert!(!output.trim().is_empty(), "Driver {} produced empty output", ext);
         // For native enum, the type name should be present in the output
         // (e.g., "product_category" for Go, Python, etc.)
         assert!(
             output.contains("product_category"),
             "Driver {} should emit native enum type name 'product_category'",
-            driver.file_extension()
+            ext
         );
     }
 }
