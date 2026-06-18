@@ -1320,7 +1320,7 @@ impl SyncEngine {
         Ok(Some(filename))
     }
 
-    /// Executes a list of migration statements against the target database.
+    /// Executes a list of migration statements against the target database within a transaction.
     pub async fn execute_migration(
         db_url: &str,
         db_type: DatabaseType,
@@ -1343,36 +1343,54 @@ impl SyncEngine {
                     .await
                     .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to connect to PostgreSQL: {}", e)))?;
+                let mut tx = pool.begin().await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to begin transaction: {}", e)))?;
                 for stmt in statements {
                     println!("   ▶ {}", stmt);
-                    sqlx::query(stmt).execute(&pool).await
+                    sqlx::query(stmt).execute(&mut *tx).await
                         .map_err(from_sqlx)
                         .map_err(|e| ValkyrinError::Migration(format!("Failed to execute: {}: {}", stmt, e)))?;
                 }
+                tx.commit().await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to commit transaction: {}", e)))?;
             }
             DatabaseType::MySQL => {
                 let pool = sqlx::Pool::<sqlx::MySql>::connect(db_url)
                     .await
                     .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to connect to MySQL: {}", e)))?;
+                let mut tx = pool.begin().await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to begin transaction: {}", e)))?;
                 for stmt in statements {
                     println!("   ▶ {}", stmt);
-                    sqlx::query(stmt).execute(&pool).await
+                    sqlx::query(stmt).execute(&mut *tx).await
                         .map_err(from_sqlx)
                         .map_err(|e| ValkyrinError::Migration(format!("Failed to execute: {}: {}", stmt, e)))?;
                 }
+                tx.commit().await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to commit transaction: {}", e)))?;
             }
             DatabaseType::SQLite => {
                 let pool = sqlx::Pool::<sqlx::Sqlite>::connect(db_url)
                     .await
                     .map_err(from_sqlx)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to connect to SQLite: {}", e)))?;
+                let mut tx = pool.begin().await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to begin transaction: {}", e)))?;
                 for stmt in statements {
                     println!("   ▶ {}", stmt);
-                    sqlx::query(stmt).execute(&pool).await
+                    sqlx::query(stmt).execute(&mut *tx).await
                         .map_err(from_sqlx)
                         .map_err(|e| ValkyrinError::Migration(format!("Failed to execute: {}: {}", stmt, e)))?;
                 }
+                tx.commit().await
+                    .map_err(from_sqlx)
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to commit transaction: {}", e)))?;
             }
         }
 
@@ -1573,9 +1591,11 @@ impl SyncEngine {
                     }
                     
                     // Execute the migration in a transaction
-                    let result = sqlx::query(&sql)
-                        .execute(&pool)
-                        .await;
+                    let mut tx = pool.begin().await
+                        .map_err(from_sqlx)
+                        .map_err(|e| ValkyrinError::Migration(format!("Failed to begin transaction: {}", e)))?;
+                    
+                    let result = sqlx::query(&sql).execute(&mut *tx).await;
                     
                     // Record the result
                     match result {
@@ -1588,10 +1608,14 @@ impl SyncEngine {
                             .bind(file_name)
                             .bind(&checksum)
                             .bind(true)
-                            .execute(&pool)
+                            .execute(&mut *tx)
                             .await
                             .map_err(from_sqlx)
                             .map_err(|e| ValkyrinError::Migration(format!("Failed to record migration: {}", e)))?;
+                            
+                            tx.commit().await
+                                .map_err(from_sqlx)
+                                .map_err(|e| ValkyrinError::Migration(format!("Failed to commit transaction: {}", e)))?;
                         }
                         Err(e) => {
                             println!("❌  Failed to apply migration: {}", file_name);
@@ -1602,10 +1626,15 @@ impl SyncEngine {
                             .bind(file_name)
                             .bind(&checksum)
                             .bind(false)
-                            .execute(&pool)
+                            .execute(&mut *tx)
                             .await
                             .map_err(from_sqlx)
                             .map_err(|e| ValkyrinError::Migration(format!("Failed to record failed migration: {}", e)))?;
+                            
+                            tx.rollback().await
+                                .map_err(from_sqlx)
+                                .map_err(|e| ValkyrinError::Migration(format!("Failed to rollback transaction: {}", e)))?;
+                            
                             return Err(ValkyrinError::Migration(format!("Migration failed: {}", e)));
                         }
                     }
@@ -1670,9 +1699,11 @@ impl SyncEngine {
                     }
                     
                     // Execute the migration in a transaction
-                    let result = sqlx::query(&sql)
-                        .execute(&pool)
-                        .await;
+                    let mut tx = pool.begin().await
+                        .map_err(from_sqlx)
+                        .map_err(|e| ValkyrinError::Migration(format!("Failed to begin transaction: {}", e)))?;
+                    
+                    let result = sqlx::query(&sql).execute(&mut *tx).await;
                     
                     // Record the result
                     match result {
@@ -1685,10 +1716,14 @@ impl SyncEngine {
                             .bind(file_name)
                             .bind(&checksum)
                             .bind(true)
-                            .execute(&pool)
+                            .execute(&mut *tx)
                             .await
                             .map_err(from_sqlx)
                             .map_err(|e| ValkyrinError::Migration(format!("Failed to record migration: {}", e)))?;
+                            
+                            tx.commit().await
+                                .map_err(from_sqlx)
+                                .map_err(|e| ValkyrinError::Migration(format!("Failed to commit transaction: {}", e)))?;
                         }
                         Err(e) => {
                             println!("❌  Failed to apply migration: {}", file_name);
@@ -1699,10 +1734,15 @@ impl SyncEngine {
                             .bind(file_name)
                             .bind(&checksum)
                             .bind(false)
-                            .execute(&pool)
+                            .execute(&mut *tx)
                             .await
                             .map_err(from_sqlx)
                             .map_err(|e| ValkyrinError::Migration(format!("Failed to record failed migration: {}", e)))?;
+                            
+                            tx.rollback().await
+                                .map_err(from_sqlx)
+                                .map_err(|e| ValkyrinError::Migration(format!("Failed to rollback transaction: {}", e)))?;
+                            
                             return Err(ValkyrinError::Migration(format!("Migration failed: {}", e)));
                         }
                     }
@@ -1767,9 +1807,11 @@ impl SyncEngine {
                     }
                     
                     // Execute the migration in a transaction
-                    let result = sqlx::query(&sql)
-                        .execute(&pool)
-                        .await;
+                    let mut tx = pool.begin().await
+                        .map_err(from_sqlx)
+                        .map_err(|e| ValkyrinError::Migration(format!("Failed to begin transaction: {}", e)))?;
+                    
+                    let result = sqlx::query(&sql).execute(&mut *tx).await;
                     
                     // Record the result
                     match result {
@@ -1782,10 +1824,14 @@ impl SyncEngine {
                             .bind(file_name)
                             .bind(&checksum)
                             .bind(true)
-                            .execute(&pool)
+                            .execute(&mut *tx)
                             .await
                             .map_err(from_sqlx)
                             .map_err(|e| ValkyrinError::Migration(format!("Failed to record migration: {}", e)))?;
+                            
+                            tx.commit().await
+                                .map_err(from_sqlx)
+                                .map_err(|e| ValkyrinError::Migration(format!("Failed to commit transaction: {}", e)))?;
                         }
                         Err(e) => {
                             println!("❌  Failed to apply migration: {}", file_name);
@@ -1796,10 +1842,15 @@ impl SyncEngine {
                             .bind(file_name)
                             .bind(&checksum)
                             .bind(false)
-                            .execute(&pool)
+                            .execute(&mut *tx)
                             .await
                             .map_err(from_sqlx)
                             .map_err(|e| ValkyrinError::Migration(format!("Failed to record failed migration: {}", e)))?;
+                            
+                            tx.rollback().await
+                                .map_err(from_sqlx)
+                                .map_err(|e| ValkyrinError::Migration(format!("Failed to rollback transaction: {}", e)))?;
+                            
                             return Err(ValkyrinError::Migration(format!("Migration failed: {}", e)));
                         }
                     }
