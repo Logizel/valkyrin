@@ -93,7 +93,7 @@ export default function PropertiesSidebar({
       const nameResult = Validation.validateColumnName(
         formData.name,
         existingColumnNames,
-        column?.id
+        column?.name
       );
       errors.push(...nameResult.errors);
 

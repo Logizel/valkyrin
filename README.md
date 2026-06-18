@@ -1,22 +1,23 @@
-# Valkyrin
+# **Valkyrin**
 
-Valkyrin is a local-first, terminal-driven database schema architect and code generator built using **Rust**. It allows you to design relational database schemas using an interactive visual canvas and automatically compiles them into type-safe, framework-specific backend code.
+**Valkyrin** is a local-first, terminal-driven database schema architect and code generator built using **Rust**. It allows you to design relational database schemas using an interactive visual canvas and automatically compiles them into type-safe, framework-specific backend code.
 
-Unlike traditional diagramming tools that only export static SQL text, Valkyrin functions as a developer utility that writes and maintains ORM models directly within your active local repository.
+Unlike traditional diagramming tools that only export static SQL text, **Valkyrin** functions as a developer utility that writes and maintains ORM models directly within your active local repository.
 
 ## Supported Ecosystems
 
-Valkyrin translates a single visual blueprint into native code across five primary programming language environments:
+**Valkyrin** translates a single visual blueprint into native code across five primary programming language environments:
 
 - **Python:** SQLAlchemy and SQLModel
 - **Go (Golang):** GORM and Ent
 - **Rust:** Diesel and SeaORM
 - **JavaScript:** Sequelize and TypeORM
 - **TypeScript:** Prisma and TypeORM
+  (many more to come)
 
 ## Core Workflow
 
-_Valkyrin_ operates entirely on your local machine through four fundamental CLI commands:
+**Valkyrin** operates entirely on your local machine through four fundamental CLI commands:
 
 1. `valkyrin init`: Initializes the project context by creating a configuration file that defines your target language, chosen ORM, preferred database engine _(PostgreSQL, MySQL, SQLite)_, and output file paths.
 2. `valkyrin canvas`: Spins up a lightweight, local web server and opens a browser-based, drag‑and‑drop node workspace. Here, you visually add tables, define columns, assign data types, and link relationships. Saving updates the local blueprint file.
@@ -29,7 +30,7 @@ _Valkyrin_ operates entirely on your local machine through four fundamental CLI 
 
 ## Composite Primary Keys
 
-Valkyrin supports composite primary keys. In the canvas, mark multiple columns as primary and set their order (1, 2, …). The generated migration and ORM code will emit the correct composite primary key syntax for each target:
+**Valkyrin** supports composite primary keys. In the canvas, mark multiple columns as primary and set their order (1, 2, …). The generated migration and ORM code will emit the correct composite primary key syntax for each target:
 
 - **PostgreSQL / MySQL / SQLite:** `PRIMARY KEY (col1, col2, ...)`
 - **Go (GORM):** multiple `primaryKey` tags
@@ -49,4 +50,4 @@ Valkyrin supports composite primary keys. In the canvas, mark multiple columns a
 
 ## Status
 
-_Valkyrin_ is still in it's _early development_ stage so please hang on!!
+**Valkyrin** is still in it's _early development_ stage so please hang on!!
