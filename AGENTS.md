@@ -85,7 +85,7 @@ All 6 master plan phases are **complete**:
 5. **Bun vs npm** — UI uses Bun, not npm or pnpm.
 6. **Sync command** now requires `SyncMode` enum (not just url and db_type).
 7. **config.rs** validates supported language/ORM combinations with `ensure!`.
-8. **compiler.rs** auto-disambiguates duplicate table names and sanitizes filenames.
+8. Sync Engine Complexity: sync.rs and migration.rs use highly advanced DAG topological sorting, chained cryptographic hashing (valkyrin.sum), and statement-level execution checkpoints. Do NOT replace these with naive loops.
 
 _VERY IMPORTANT_
 

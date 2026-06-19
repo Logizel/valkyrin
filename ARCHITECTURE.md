@@ -155,3 +155,15 @@ When modifying this codebase, strictly adhere to the established architectural b
 
 - **The Problem:** In many tools, drawing a line between tables is purely cosmetic. It doesn't actually affect the generated code, leaving the developer to figure out the Foreign Keys manually.
 - **The Valkyrin Solution:** Valkyrin features an interactive Relational Edge. When you connect two tables in the UI, you can click a badge on the connecting line to toggle between `1:N`, `1:1`, and `M:N`. When you hit Generate, the Compiler Engine's "Pass 2 Constraint Injector" intercepts this graph and mathematically injects the correct Foreign Key fields (e.g., `user_id *string`) directly into the target structs.
+
+### 6. DAG Topological Sorting (Deadlock Immunity)
+
+When multiple tables are deleted or altered, standard sync engines often crash due to foreign key circular dependencies. Valkyrin converts your schema changes into a Directed Acyclic Graph (DAG). It mathematically untangles mutual foreign keys, generating `DROP CONSTRAINT` statements before table drops, guaranteeing zero-deadlock migrations.
+
+### 7. Chained Directory Hashing (Drift & Tamper Detection)
+
+Valkyrin ensures absolute parity between your Git history and your database using a `valkyrin.sum` file. Every migration file's hash is sequentially chained to the file before it. If a developer accidentally deletes an old file, alters a past migration, or injects a file out-of-order, the cryptographic chain breaks and Valkyrin safely locks the database.
+
+### 8. Predictive Data-Loss Analysis
+
+Instead of annoying developers with blanket `--confirm` flags for every change, Valkyrin uses a 2-bit Resource Span Tracker to analyze your schema diffs. It mathematically proves if a table was created and dropped in the same session (safe). For existing tables, it performs a live `SELECT 1` check. It only triggers a `DestructiveChange` alarm if _actual user data_ is about to be deleted.

@@ -83,7 +83,7 @@
 
 ## 📋 PRIORITY ORDERED TASKS
 
-### PRIORITY 1: MIGRATION SAFETY (BLOCKER)
+### PRIORITY 1: MIGRATION SAFETY (BLOCKER)(COMPLETED)
 
 ```
 1.1: Create migration history table and tracking
@@ -204,14 +204,4 @@ COMMIT AFTER EACH DRIVER - allows incremental verification
 
 ## 🛠️ COMMIT STRATEGY
 
-Format: `<priority>.<task>: <action>`
-
-Examples:
-
-- `1.1: create migration history table and tracking`
-- `2.1.1: emit gorm index tags for indexed columns`
-- `3.1: auto-generate junction entity for many-to-many relations`
-- `4.1: add ValkyrinError enum with structured error codes`
-
 **One commit per logical change. No feature commits without passing tests.**
-

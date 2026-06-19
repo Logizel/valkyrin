@@ -6,7 +6,7 @@ use sqlx::migrate::MigrateDatabase;
 use sqlx::Row;
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::migration::{create_migration_table, create_migration_table_mysql, create_migration_table_sqlite, pg_advisory_lock, mysql_lock, sqlite_lock, MigrationRecord};
+use crate::migration::{create_migration_table, create_migration_table_mysql, create_migration_table_sqlite, upgrade_migration_table_postgres, upgrade_migration_table_mysql, upgrade_migration_table_sqlite, pg_advisory_lock, mysql_lock, sqlite_lock, MigrationRecord};
 use sha2::{Sha256, Digest};
 use std::collections::HashMap;
 
@@ -1548,6 +1548,8 @@ impl SyncEngine {
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire advisory lock: {}", e)))?;
                 create_migration_table(&mut conn).await
                     .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
+                upgrade_migration_table_postgres(&mut conn).await
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to upgrade migration table: {}", e)))?;
 
                 // Get already applied migrations from the database (use pool as executor)
                 let applied_migrations: Vec<MigrationRecord> = sqlx::query_as(
@@ -1656,6 +1658,8 @@ impl SyncEngine {
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire MySQL lock: {}", e)))?;
                 create_migration_table_mysql(&mut conn).await
                     .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
+                upgrade_migration_table_mysql(&mut conn).await
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to upgrade migration table: {}", e)))?;
 
                 // Get already applied migrations from the database (use pool as executor)
                 let applied_migrations: Vec<MigrationRecord> = sqlx::query_as(
@@ -1752,7 +1756,7 @@ impl SyncEngine {
             }
             DatabaseType::SQLite => {
                 // Create connection pool and acquire lock
-                sqlite_lock(db_url).await
+                sqlite_lock(db_url)
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire SQLite lock: {}", e)))?;
                 let pool = sqlx::Pool::<sqlx::Sqlite>::connect(db_url)
                     .await
@@ -1764,6 +1768,8 @@ impl SyncEngine {
                     .map_err(|e| ValkyrinError::Database(format!("Failed to acquire SQLite connection: {}", e)))?;
                 create_migration_table_sqlite(&mut conn).await
                     .map_err(|e| ValkyrinError::Migration(format!("Failed to create migration table: {}", e)))?;
+                upgrade_migration_table_sqlite(&mut conn).await
+                    .map_err(|e| ValkyrinError::Migration(format!("Failed to upgrade migration table: {}", e)))?;
 
                 // Get already applied migrations from the database (use pool as executor)
                 let applied_migrations: Vec<MigrationRecord> = sqlx::query_as(

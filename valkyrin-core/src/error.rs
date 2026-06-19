@@ -39,6 +39,33 @@ pub enum ValkyrinError {
 
     #[error("VAL-012: Internal error - {0}")]
     Internal(String),
+
+    #[error("VAL-013: Migration checksum mismatch - {0}")]
+    ChecksumMismatch(String),
+
+    #[error("VAL-014: Migration history tampered - {0}")]
+    HistoryTampered(String),
+
+    #[error("VAL-015: Migration file removed - {0}")]
+    MigrationRemoved(String),
+
+    #[error("VAL-016: Migration file edited - {0}")]
+    MigrationEdited(String),
+
+    #[error("VAL-017: Migration file injected - {0}")]
+    MigrationInjected(String),
+
+    #[error("VAL-018: Directory checksum not found - {0}")]
+    ChecksumNotFound(String),
+
+    #[error("VAL-019: Destructive change detected - {0}")]
+    DestructiveChange(String),
+
+    #[error("VAL-020: History non-linear - {0}")]
+    HistoryNonLinear(String),
+
+    #[error("VAL-021: Statement execution failed - {0}")]
+    StatementExecError(String),
 }
 
 impl ValkyrinError {
@@ -57,6 +84,15 @@ impl ValkyrinError {
             ValkyrinError::Sync(_) => "VAL-010",
             ValkyrinError::CliArg(_) => "VAL-011",
             ValkyrinError::Internal(_) => "VAL-012",
+            ValkyrinError::ChecksumMismatch(_) => "VAL-013",
+            ValkyrinError::HistoryTampered(_) => "VAL-014",
+            ValkyrinError::MigrationRemoved(_) => "VAL-015",
+            ValkyrinError::MigrationEdited(_) => "VAL-016",
+            ValkyrinError::MigrationInjected(_) => "VAL-017",
+            ValkyrinError::ChecksumNotFound(_) => "VAL-018",
+            ValkyrinError::DestructiveChange(_) => "VAL-019",
+            ValkyrinError::HistoryNonLinear(_) => "VAL-020",
+            ValkyrinError::StatementExecError(_) => "VAL-021",
         }
     }
 
