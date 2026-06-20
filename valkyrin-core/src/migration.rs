@@ -470,6 +470,285 @@ pub fn validate_valkyrin_sum(migrations_dir: &Path) -> ValkyrinResult<TamperDiag
     Ok(TamperDiagnosis::Valid)
 }
 
+/// Represents a single SQL statement parsed from a migration file
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Statement {
+    pub text: String,
+    pub position: usize,
+    pub comments: Vec<String>,
+}
+
+/// Configuration for the SQL statement parser
+#[derive(Debug, Clone)]
+pub struct ParseConfig {
+    pub delimiter: String,
+}
+
+impl Default for ParseConfig {
+    fn default() -> Self {
+        Self {
+            delimiter: ";".to_string(),
+        }
+    }
+}
+
+/// Parses a SQL file into individual statements using a state machine
+/// Handles: parentheses depth, quoted strings, dollar quotes, comments, DELIMITER command
+pub fn parse_sql_statements(content: &str, config: ParseConfig) -> ValkyrinResult<Vec<Statement>> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut comments = Vec::new();
+    let mut position = 0;
+    let mut paren_depth: i32 = 0;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut in_backtick = false;
+    let mut in_dollar_quote = false;
+    let mut dollar_tag = String::new();
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+    let mut delimiter = config.delimiter;
+    let mut statement_start = 0;
+    
+    let chars: Vec<char> = content.chars().collect();
+    let mut i = 0;
+    
+    while i < chars.len() {
+        let c = chars[i];
+        let next = chars.get(i + 1).copied();
+        
+        // Handle DELIMITER command (MySQL)
+        if !in_single_quote && !in_double_quote && !in_backtick && !in_dollar_quote 
+            && !in_line_comment && !in_block_comment && paren_depth == 0 {
+            let remaining: String = chars[i..].iter().collect();
+            if remaining.to_uppercase().starts_with("DELIMITER ") {
+                // Find end of line
+                let line_end = remaining.find('\n').unwrap_or(remaining.len());
+                let delimiter_line = &remaining[..line_end];
+                let parts: Vec<&str> = delimiter_line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    delimiter = parts[1].to_string();
+                }
+                i += line_end;
+                continue;
+            }
+        }
+        
+        // Track position
+        if paren_depth == 0 && current.trim().is_empty() && !in_line_comment && !in_block_comment {
+            statement_start = position;
+        }
+        
+        // Handle line comment --
+        if !in_single_quote && !in_double_quote && !in_backtick && !in_dollar_quote 
+            && !in_block_comment && c == '-' && next == Some('-') {
+            in_line_comment = true;
+            i += 2;
+            position += 2;
+            continue;
+        }
+        
+        // Handle block comment /*
+        if !in_single_quote && !in_double_quote && !in_backtick && !in_dollar_quote 
+            && !in_line_comment && c == '/' && next == Some('*') {
+            in_block_comment = true;
+            i += 2;
+            position += 2;
+            continue;
+        }
+        
+        // Handle MySQL # comment
+        if !in_single_quote && !in_double_quote && !in_backtick && !in_dollar_quote 
+            && !in_block_comment && c == '#' {
+            in_line_comment = true;
+            i += 1;
+            position += 1;
+            continue;
+        }
+        
+        // End line comment
+        if in_line_comment && c == '\n' {
+            in_line_comment = false;
+            i += 1;
+            position += 1;
+            continue;
+        }
+        
+        // End block comment
+        if in_block_comment && c == '*' && next == Some('/') {
+            in_block_comment = false;
+            i += 2;
+            position += 2;
+            continue;
+        }
+        
+        // Skip if in comment
+        if in_line_comment || in_block_comment {
+            current.push(c);
+            i += 1;
+            position += c.len_utf8();
+            continue;
+        }
+        
+        // Handle dollar quoting (PostgreSQL)
+        if !in_single_quote && !in_double_quote && !in_backtick && c == '$' {
+            // Check for dollar quote tag
+            let mut tag_end = i + 1;
+            while tag_end < chars.len() && chars[tag_end].is_ascii_alphanumeric() {
+                tag_end += 1;
+            }
+            if tag_end < chars.len() && chars[tag_end] == '$' {
+                let tag: String = chars[i..=tag_end].iter().collect();
+                if !in_dollar_quote {
+                    in_dollar_quote = true;
+                    dollar_tag = tag.clone();
+                } else if tag == dollar_tag {
+                    in_dollar_quote = false;
+                    dollar_tag.clear();
+                }
+                current.push_str(&tag);
+                i = tag_end + 1;
+                position += tag.len();
+                continue;
+            }
+        }
+        
+        // Handle single quotes
+        if !in_double_quote && !in_backtick && !in_dollar_quote && c == '\'' {
+            // Check for escaped quote
+            if next == Some('\'') {
+                current.push('\'');
+                current.push('\'');
+                i += 2;
+                position += 2;
+                continue;
+            }
+            in_single_quote = !in_single_quote;
+        }
+        
+        // Handle double quotes
+        if !in_single_quote && !in_backtick && !in_dollar_quote && c == '"' {
+            if next == Some('"') {
+                current.push('"');
+                current.push('"');
+                i += 2;
+                position += 2;
+                continue;
+            }
+            in_double_quote = !in_double_quote;
+        }
+        
+        // Handle backticks (MySQL)
+        if !in_single_quote && !in_double_quote && !in_dollar_quote && c == '`' {
+            if next == Some('`') {
+                current.push('`');
+                current.push('`');
+                i += 2;
+                position += 2;
+                continue;
+            }
+            in_backtick = !in_backtick;
+        }
+        
+        // Track parentheses depth
+        if !in_single_quote && !in_double_quote && !in_backtick && !in_dollar_quote {
+            if c == '(' {
+                paren_depth += 1;
+            } else if c == ')' {
+                paren_depth = paren_depth.saturating_sub(1);
+            }
+        }
+        
+        current.push(c);
+        i += 1;
+        position += c.len_utf8();
+        
+        // Check for statement delimiter at depth 0
+        if paren_depth == 0 && !in_single_quote && !in_double_quote 
+            && !in_backtick && !in_dollar_quote {
+            let current_str = current.trim_end();
+            if current_str.ends_with(&delimiter) {
+                let stmt_text = current_str[..current_str.len() - delimiter.len()].trim();
+                if !stmt_text.is_empty() {
+                    statements.push(Statement {
+                        text: stmt_text.to_string(),
+                        position: statement_start,
+                        comments: comments.drain(..).collect(),
+                    });
+                }
+                current.clear();
+            }
+        }
+    }
+    
+    // Handle any remaining content
+    let remaining = current.trim();
+    if !remaining.is_empty() {
+        statements.push(Statement {
+            text: remaining.to_string(),
+            position: statement_start,
+            comments: comments.drain(..).collect(),
+        });
+    }
+    
+    Ok(statements)
+}
+
+/// Computes cumulative hashes for each statement (chained like valkyrin.sum)
+pub fn compute_statement_hashes(statements: &[Statement]) -> Vec<String> {
+    let mut hashes = Vec::new();
+    let mut running_hash = [0u8; 32];
+    
+    for stmt in statements {
+        let mut hasher = Sha256::new();
+        hasher.update(running_hash);
+        hasher.update(stmt.text.as_bytes());
+        running_hash = hasher.finalize().into();
+        hashes.push(format!("h1:{}", BASE64.encode(running_hash)));
+    }
+    
+    hashes
+}
+
+/// Represents a migration revision with statement-level tracking
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Revision {
+    pub version: String,
+    pub description: String,
+    pub total_statements: usize,
+    pub file_hash: String,
+    pub applied: usize,
+    pub partial_hashes: Vec<String>,
+    pub error: Option<String>,
+    pub error_stmt: Option<String>,
+    pub execution_time_ms: Option<u64>,
+}
+
+impl Revision {
+    pub fn new(version: String, description: String, statements: &[Statement], file_hash: String) -> Self {
+        let total = statements.len();
+        Self {
+            version,
+            description,
+            total_statements: total,
+            file_hash,
+            applied: 0,
+            partial_hashes: Vec::new(),
+            error: None,
+            error_stmt: None,
+            execution_time_ms: None,
+        }
+    }
+    
+    pub fn is_complete(&self) -> bool {
+        self.applied >= self.total_statements && self.partial_hashes.is_empty()
+    }
+    
+    pub fn is_partial(&self) -> bool {
+        self.applied > 0 && self.applied < self.total_statements
+    }
+}
+
 /// Applies migrations with proper locking and tracking
 pub async fn apply_migrations_with_lock(
     db_url: &str,
@@ -524,6 +803,45 @@ enum DatabaseType {
     PostgreSQL,
     MySQL,
     SQLite,
+}
+
+/// Enforces that migrations are applied in strict sequential order without skipping
+pub fn enforce_execution_order(
+    applied: &[MigrationRecord],
+    pending: &[std::path::PathBuf],
+) -> ValkyrinResult<()> {
+    if applied.is_empty() {
+        return Ok(());
+    }
+    
+    let last = &applied[applied.len() - 1];
+    if last.applied_statements.unwrap_or(0) != 0 && last.success {
+        // Last migration completed successfully, check for gaps
+        // Extract version numbers from applied migrations
+        let applied_versions: Vec<String> = applied.iter()
+            .filter(|r| r.success)
+            .map(|r| r.version.clone())
+            .collect();
+        
+        // Check pending migrations for any that should have been applied before the last
+        for pending_path in pending {
+            if let Some(pending_name) = pending_path.file_name().and_then(|n| n.to_str()) {
+                let pending_version = pending_name.to_string();
+                if applied_versions.contains(&pending_version) {
+                    continue; // Already applied
+                }
+                // Check if this pending migration comes before the last applied one
+                if pending_version < last.version {
+                    return Err(ValkyrinError::HistoryNonLinear(
+                        format!("History non-linearity detected: migration '{}' was skipped (last applied: '{}'). Use --force to override.", 
+                                pending_version, last.version)
+                    ));
+                }
+            }
+        }
+    }
+    
+    Ok(())
 }
 
 #[derive(Debug)]
