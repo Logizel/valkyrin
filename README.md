@@ -137,13 +137,19 @@ flowchart TB
 
     Drivers --> Output
 
-    classDef pkg fill:#f5f5f5,stroke:#333,stroke-width:2px;
-    classDef ext fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
-    classDef core fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef cli fill:#1e293b,stroke:#64748b,stroke-width:2px,color:#f1f5f9;
+    classDef core fill:#1e3a5f,stroke:#3b82f6,stroke-width:2px,color:#dbeafe;
+    classDef server fill:#7c2d12,stroke:#ea580c,stroke-width:2px,color:#fed7aa;
+    classDef ui fill:#4c1d95,stroke:#a855f7,stroke-width:2px,color:#e9d5ff;
+    classDef ext fill:#14532d,stroke:#22c55e,stroke-width:2px,color:#dcfce7;
+    classDef data fill:#78350f,stroke:#f59e0b,stroke-width:3px,color:#fef3c7;
     
-    class CLI,Core,Server,UI pkg;
+    class CLI cli;
+    class Core core;
+    class Server server;
+    class UI ui;
     class External ext;
-    class IR,CanvasJSON,SchemaVDB core;
+    class IR,CanvasJSON,SchemaVDB,Output data;
 ```
 
 ## Core Features Deep-Dive
