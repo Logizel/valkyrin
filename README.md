@@ -45,7 +45,106 @@ valkyrin push --url postgresql://user:pass@localhost/db --confirm
 
 ## Architecture Diagram
 
-![Architecture Diagram](https://www.plantuml.com/plantuml/svg/TLRDRkCs4BxhAGQvDDkLVuls8BJ5gexYQbUnlP8sQ64L2vfYPCOIAP2KiyOYrpv07x5FKf2KPCNT-63Cp3V36Gxd6-YTL4YefYeTUQ2iHW9LK2DyG0L9rAaa80XMY1Kb6JZ8FShv4sK5FA1I3X4a17zAznGV694Ivexp7VoYVv2kDn3vVmQn1uiej4QdpGHNHrGUJeAo4Ixf5Nnr0BOBNbM8vTBB66LKkO0HEoBfGa4O4KWHDsFonB0B5IsC3dKZzsx6y9xWWmk2b-KEuSDVWAJEwJoVgrciu-3r6hWWNH4c9xnFrYjxZD6rgj4mzY1WYghJKg1wRpp2s05me6iYN2ruLTEI2DZGcfIKjKS3R3T8IfXvi4524c6YjMasGESUB3YJIY3ALCP2zaYmucVVkVMz_G0BNZOLa_0sO-yRXXNb35AqAuaqphSVEgkDy9CKxeWeYCZOTIs89E989E16Abu1vZbvO-By9BLkDkmUbJH7YkkeUpyQJQUpyTW8yvaDw3rim6mA4M95erjn8-YH29cnV__-1ogUar9ElZT1BU80F5zqBpan304hXdsxeGyFhSr6quS7YoGrKXIL4A4JRoxxrOBVI79d1aXtx3AJluIKrxpa1SMep5Z2XR8v_MMRKY55Ag9VPw7dhkQKATlpWMvzkmaRowRAs3NU8yf83idl_cZ-uqzz_unFqbGsw7CNzTdEEULCPapffpK1VV7IFBUvtc3Iao2-3s9u2vzU9vrvVD6ElF-bgI0n5l1-c4wdTWw-c7gsef5gHAeToJFsAGHVIjBUDj16xR8CKfYWcavAZd8Rl0aZZWouMISjAj7HNi3VX0aw4btq_qjhQCQkOuAmWjkIFxrfYpHNNV7Sdj1h9eFWDH6A4fdGdEnGInR1Q_qAsvYKfbj1Nf2CpRmLJ63cpM02Tvxbk4PC8nh5HxfAcDiRQaDNQTVUu8yqY5T-1FuYNST9s-BjXajL299yZ6psfREzEtMQaPnjyZ6Yobx0YeFr5ApIs8_Wna_zxaY9zwH2usE-6pzApcoSiTtV_3RSRAjLi4Z3zQehHg_RqUZNmUu23t2xNHrdODPUOUo4iP7iBZB_lJut-jpeWvLo5Y_Ew8ZTgkTjqXhEs-Ao3aDgm_Jsn5xkUDoHtTZwHXYtdqszI_20CYMuh0bM0yGym6kWVOkNgDFUmrRcBnsz64nF1nGVoDtTUYPVOfUa7VX-4tSCApLYQTQh7RM61ZEZBN3HdHQziFQIxS2PJhra1y1mwANDaAKZniMnBxgsxHR--6l1tVha2kagwJvAjnPKLkZP3FIwKNMZ7ESTORd-AFaF)
+```mermaid
+flowchart TB
+    subgraph CLI["valkyrin-cli"]
+        Commands["Commands:\ninit, canvas, generate,\nsync, migrate, push,\ncheck, rollback"]
+    end
+
+    subgraph Core["valkyrin-core"]
+        CanvasJSON["Canvas JSON"]
+        IR["IR: EntityGraph"]
+        
+        subgraph Compiler["Compiler Pipeline"]
+            Pass1["Pass 1: Parser"]
+            Pass2["Pass 2: Constraint\nInjector"]
+            FKJunction["FK Columns +\nJunction Tables"]
+            ASTMerger["AST Merger\n(preserves custom code)"]
+            Validator["Validator\n(VAL-001..VAL-021)"]
+            Drivers["10 Language Drivers"]
+        end
+        
+        subgraph Sync["Sync Engine"]
+            Diff["Diff Engine"]
+            Spatial["Spatial Layout\nInjector"]
+        end
+        
+        subgraph Migration["Migration Engine"]
+            DAG["DAG Topological\nSort"]
+            Checkpoints["Statement\nCheckpoints"]
+            ValkyrinSum["valkyrin.sum\n(chained SHA-256)"]
+            MigrationsTable["_valkyrin_migrations\ntable"]
+        end
+    end
+
+    subgraph Server["valkyrin-server"]
+        Axum["Axum Server :3000"]
+        Embed["rust-embed\nUI Assets"]
+        APILoad["GET /api/load"]
+        APISave["POST /api/save"]
+    end
+
+    subgraph UI["valkyrin-ui (React Flow)"]
+        TableNode["TableNode"]
+        Props["PropertiesSidebar"]
+        Edge["RelationEdge\n1:N / 1:1 / M:N"]
+        AutoSave["Auto-save 2s"]
+    end
+
+    subgraph External["External Actors"]
+        PG["PostgreSQL"]
+        MySQL["MySQL"]
+        SQLite["SQLite"]
+    end
+
+    SchemaVDB["schema.vdb.json"]
+    Output["models/*.go,py,rs,ts,js,prisma"]
+
+    Commands --> CanvasJSON
+    
+    CanvasJSON --> IR
+    IR --> Pass1
+    Pass1 --> Pass2
+    Pass2 --> FKJunction
+    FKJunction --> IR
+    IR --> Drivers
+    IR --> ASTMerger
+    IR --> Validator
+
+    CanvasJSON --> Diff
+    Diff --> IR
+    Diff --> Spatial
+    Spatial --> SchemaVDB
+    Diff <--> PG
+    Diff <--> MySQL
+    Diff <--> SQLite
+
+    Drivers --> DAG
+    DAG --> Checkpoints
+    Checkpoints --> ValkyrinSum
+    Checkpoints --> MigrationsTable
+    ValkyrinSum --> MigrationsTable
+
+    Axum --> Embed
+    Axum --> APILoad
+    Axum --> APISave
+    APILoad --> SchemaVDB
+    APISave --> SchemaVDB
+    SchemaVDB <--> TableNode
+    TableNode --> Props
+    TableNode --> Edge
+    AutoSave --> SchemaVDB
+
+    Drivers --> Output
+
+    classDef pkg fill:#f5f5f5,stroke:#333,stroke-width:2px;
+    classDef ext fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef core fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    
+    class CLI,Core,Server,UI pkg;
+    class External ext;
+    class IR,CanvasJSON,SchemaVDB core;
+```
 
 ## Core Features Deep-Dive
 
