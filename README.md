@@ -45,6 +45,7 @@ valkyrin push --url postgresql://user:pass@localhost/db --confirm
 
 ## Architecture Diagram (PlantUML)
 
+```plantuml
 @startuml
 package "valkyrin-cli" {
   [Commands: init, canvas, generate, sync, migrate, push, check, rollback]
@@ -72,6 +73,7 @@ package "valkyrin-core" {
 [schema.vdb.json] <--> [Canvas]
 [schema.vdb.json] <--> [Compiler]
 @enduml
+```
 
 ## Core Features Deep-Dive
 
