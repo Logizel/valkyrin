@@ -1,12 +1,12 @@
 // valkyrin-core/src/sync.rs
 use crate::error::{ValkyrinError, ValkyrinResult, from_sqlx};
 use crate::ir::{DataType, Entity, Field};
+use crate::migration::{create_migration_table, create_migration_table_mysql, create_migration_table_sqlite, upgrade_migration_table_postgres, upgrade_migration_table_mysql, upgrade_migration_table_sqlite, pg_advisory_lock, mysql_lock, sqlite_lock, MigrationRecord};
 use async_trait::async_trait;
 use sqlx::migrate::MigrateDatabase;
-use sqlx::Row;
+use sqlx::{Pool, Row};
 use std::fs;
 use std::time::{SystemTime, UNIX_EPOCH};
-use crate::migration::{create_migration_table, create_migration_table_mysql, create_migration_table_sqlite, upgrade_migration_table_postgres, upgrade_migration_table_mysql, upgrade_migration_table_sqlite, pg_advisory_lock, mysql_lock, sqlite_lock, MigrationRecord};
 use sha2::{Sha256, Digest};
 use std::collections::HashMap;
 
@@ -110,6 +110,48 @@ pub enum SyncMode {
     ApplyAll,
     /// Only show the diff, do not write anything
     DryRun,
+}
+
+/// 2-bit ResourceSpan lifecycle tracking for predictive data-loss prevention
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ResourceSpan {
+    Unknown = 0,    // Existed before; no ADD/DROP in this diff
+    Added = 1,      // Created in this diff (AddSchema, AddTable, AddColumn)
+    Dropped = 2,    // Being dropped in this diff
+    Temporary = 3,  // Added AND Dropped in same diff (Added | Dropped)
+}
+
+impl ResourceSpan {
+    pub fn is_temporary(self) -> bool { self == ResourceSpan::Temporary }
+    pub fn is_dropped(self) -> bool { self as u8 & 0b10 != 0 }
+    pub fn is_added(self) -> bool { self as u8 & 0b01 != 0 }
+}
+
+pub struct SpanMap {
+    pub schemas: HashMap<String, ResourceSpan>,
+    pub tables: HashMap<String, ResourceSpan>,
+    pub columns: HashMap<(String, String), ResourceSpan>,
+    pub indexes: HashMap<(String, String), ResourceSpan>,
+    pub foreign_keys: HashMap<(String, String), ResourceSpan>,
+}
+
+impl Default for SpanMap {
+    fn default() -> Self {
+        Self {
+            schemas: HashMap::new(),
+            tables: HashMap::new(),
+            columns: HashMap::new(),
+            indexes: HashMap::new(),
+            foreign_keys: HashMap::new(),
+        }
+    }
+}
+
+impl SpanMap {
+    pub fn new() -> Self {
+        Self::default()
+    }
 }
 
 // ──────────────────────────────────────────────
@@ -756,6 +798,21 @@ pub struct Migration {
 
 pub struct SyncEngine;
 
+/// Represents a destructive change requiring confirmation
+#[derive(Debug, Clone)]
+pub struct DestructiveChange {
+    pub kind: DestructiveKind,
+    pub object_name: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DestructiveKind {
+    DropSchema,
+    DropTable,
+    DropColumn,
+}
+
 impl SyncEngine {
     /// Calculates a detailed, column-level diff between a live database schema and a local canvas.
     /// The diff is bidirectional — it detects changes in both directions.
@@ -805,6 +862,74 @@ impl SyncEngine {
             modified_tables,
             detected_relations,
         }
+    }
+
+    /// Computes ResourceSpan for all resources in a diff (single pre-pass)
+    pub fn compute_spans(diff: &DetailedDiff, local_schema: &[Entity]) -> SpanMap {
+        let mut spans = SpanMap::new();
+
+        // Schema level: if any table in schema is Added/Dropped, mark schema accordingly
+        // For simplicity, we track at table level; schema spans are derived
+
+        // Process new_tables (exist in DB but not on canvas -> Added from DB perspective)
+        for entity in &diff.new_tables {
+            spans.tables.insert(entity.name.clone(), ResourceSpan::Added);
+            // All columns in new table are Added
+            for field in &entity.fields {
+                spans.columns.insert((entity.name.clone(), field.name.clone()), ResourceSpan::Added);
+            }
+        }
+
+        // Process removed_tables (exist on canvas but not in DB -> Dropped)
+        for table_name in &diff.removed_tables {
+            spans.tables.insert(table_name.clone(), ResourceSpan::Dropped);
+            // Find columns in local schema
+            if let Some(entity) = local_schema.iter().find(|e| e.name == *table_name) {
+                for field in &entity.fields {
+                    spans.columns.insert((table_name.clone(), field.name.clone()), ResourceSpan::Dropped);
+                }
+            }
+        }
+
+        // Process modified_tables
+        for td in &diff.modified_tables {
+            let table_name = &td.table_name;
+            
+            // Check if table itself is being dropped (not typical in modified, but handle)
+            let _current_span = spans.tables.get(table_name).copied().unwrap_or(ResourceSpan::Unknown);
+            
+            // Adds: columns in DB but not in canvas -> Added
+            for field in &td.adds {
+                let key = (table_name.clone(), field.name.clone());
+                let current = spans.columns.get(&key).copied().unwrap_or(ResourceSpan::Unknown);
+                let new_span = match (current, ResourceSpan::Added) {
+                    (ResourceSpan::Dropped, ResourceSpan::Added) => ResourceSpan::Temporary,
+                    (ResourceSpan::Added, ResourceSpan::Dropped) => ResourceSpan::Temporary,
+                    (ResourceSpan::Unknown, ResourceSpan::Added) => ResourceSpan::Added,
+                    (ResourceSpan::Dropped, _) => ResourceSpan::Dropped,
+                    (_, ResourceSpan::Dropped) => ResourceSpan::Dropped,
+                    _ => current,
+                };
+                spans.columns.insert(key, new_span);
+            }
+            
+            // Removes: columns in canvas but not in DB -> Dropped
+            for field in &td.removes {
+                let key = (table_name.clone(), field.name.clone());
+                let current = spans.columns.get(&key).copied().unwrap_or(ResourceSpan::Unknown);
+                let new_span = match (current, ResourceSpan::Dropped) {
+                    (ResourceSpan::Added, ResourceSpan::Dropped) => ResourceSpan::Temporary,
+                    (ResourceSpan::Dropped, ResourceSpan::Added) => ResourceSpan::Temporary,
+                    (ResourceSpan::Unknown, ResourceSpan::Dropped) => ResourceSpan::Dropped,
+                    (ResourceSpan::Added, _) => ResourceSpan::Added,
+                    (_, ResourceSpan::Added) => ResourceSpan::Added,
+                    _ => current,
+                };
+                spans.columns.insert(key, new_span);
+            }
+        }
+
+        spans
     }
 
     /// Compares columns between a local (canvas) table and a live database table.
@@ -906,6 +1031,128 @@ impl SyncEngine {
             removes,
             changes,
         }
+    }
+
+    /// Checks if a table has any rows (async, works with all 3 DBs)
+    async fn is_table_empty(
+        pool: &Pool<sqlx::Any>,
+        table: &str,
+        db_type: DatabaseType,
+    ) -> ValkyrinResult<bool> {
+        let query = match db_type {
+            DatabaseType::PostgreSQL => format!("SELECT 1 FROM \"{}\" LIMIT 1", table),
+            DatabaseType::MySQL => format!("SELECT 1 FROM `{}` LIMIT 1", table),
+            DatabaseType::SQLite => format!("SELECT 1 FROM \"{}\" LIMIT 1", table),
+        };
+
+        let result = sqlx::query(&query)
+            .fetch_optional(pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Database(format!("Failed to check table {}: {}", table, e)))?;
+
+        Ok(result.is_none())
+    }
+
+    /// Checks if a column has any non-null values (async, works with all 3 DBs)
+    async fn is_column_all_null(
+        pool: &Pool<sqlx::Any>,
+        table: &str,
+        column: &str,
+        db_type: DatabaseType,
+    ) -> ValkyrinResult<bool> {
+        let query = match db_type {
+            DatabaseType::PostgreSQL => format!("SELECT 1 FROM \"{}\" WHERE \"{}\" IS NOT NULL LIMIT 1", table, column),
+            DatabaseType::MySQL => format!("SELECT 1 FROM `{}` WHERE `{}` IS NOT NULL LIMIT 1", table, column),
+            DatabaseType::SQLite => format!("SELECT 1 FROM \"{}\" WHERE \"{}\" IS NOT NULL LIMIT 1", table, column),
+        };
+
+        let result = sqlx::query(&query)
+            .fetch_optional(pool)
+            .await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Database(format!("Failed to check column {}.{}: {}", table, column, e)))?;
+
+        Ok(result.is_none())
+    }
+
+    /// Analyzes destructive changes using ResourceSpan and live DB checks
+    pub async fn analyze_destructive_changes(
+        pool: &Pool<sqlx::Any>,
+        diff: &DetailedDiff,
+        spans: &SpanMap,
+        local_schema: &[Entity],
+        db_type: DatabaseType,
+    ) -> ValkyrinResult<Vec<DestructiveChange>> {
+        let mut destructive = Vec::new();
+
+        // Check removed tables (DropTable)
+        for table_name in &diff.removed_tables {
+            let table_span = spans.tables.get(table_name).copied().unwrap_or(ResourceSpan::Unknown);
+            
+            // Allow if Temporary (added and dropped in same diff)
+            if table_span.is_temporary() {
+                continue;
+            }
+
+            // Allow if parent schema is being dropped (not applicable in current model, but keep for completeness)
+            
+            // Check if table is empty
+            let empty = Self::is_table_empty(pool, table_name, db_type).await?;
+            if empty {
+                continue;
+            }
+
+            // Count columns for detailed error
+            let col_count = local_schema
+                .iter()
+                .find(|e| e.name == *table_name)
+                .map(|e| e.fields.len())
+                .unwrap_or(0);
+
+            destructive.push(DestructiveChange {
+                kind: DestructiveKind::DropTable,
+                object_name: table_name.clone(),
+                reason: format!("Table '{}' has {} column(s) with live data. Use --confirm to drop.", table_name, col_count),
+            });
+        }
+
+        // Check dropped columns in modified tables
+        for td in &diff.modified_tables {
+            let table_name = &td.table_name;
+            let table_span = spans.tables.get(table_name).copied().unwrap_or(ResourceSpan::Unknown);
+            
+            // If table itself is Temporary, all its drops are allowed
+            if table_span.is_temporary() {
+                continue;
+            }
+
+            for field in &td.removes {
+                let col_key = (table_name.clone(), field.name.clone());
+                let col_span = spans.columns.get(&col_key).copied().unwrap_or(ResourceSpan::Unknown);
+
+                // Allow if column is Temporary
+                if col_span.is_temporary() {
+                    continue;
+                }
+
+                // Allow if column is VIRTUAL generated (not supported in IR yet, skip)
+                
+                // Check if column is all NULL
+                let all_null = Self::is_column_all_null(pool, table_name, &field.name, db_type).await?;
+                if all_null {
+                    continue;
+                }
+
+                destructive.push(DestructiveChange {
+                    kind: DestructiveKind::DropColumn,
+                    object_name: format!("{}.{}", table_name, field.name),
+                    reason: format!("Column '{}.{}' has non-null data. Use --confirm to drop.", table_name, field.name),
+                });
+            }
+        }
+
+        Ok(destructive)
     }
 
 /// Generates a human-readable diff report string
@@ -2055,6 +2302,9 @@ impl SyncEngine {
         // Compute diff from canvas to DB (swap arguments)
         let diff = Self::calculate_detailed_diff(&canvas_ir.entities, &live_schema);
 
+        // Compute ResourceSpan for predictive data-loss prevention
+        let spans = Self::compute_spans(&diff, &canvas_ir.entities);
+
         // Generate migration statements (forward direction: DB -> canvas)
         // For push we need opposite: apply canvas => DB changes.
         let mut statements = Vec::new();
@@ -2141,6 +2391,31 @@ impl SyncEngine {
             return Ok(());
         }
 
+        // Create pool for live DB checks
+        let pool = sqlx::Pool::<sqlx::Any>::connect(db_url).await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Database(format!("Failed to connect for live checks: {}", e)))?;
+
+        // Analyze destructive changes with predictive data-loss prevention
+        let destructive_changes = Self::analyze_destructive_changes(
+            &pool,
+            &diff,
+            &spans,
+            &canvas_ir.entities,
+            db_type,
+        ).await?;
+
+        if !destructive_changes.is_empty() && !confirm {
+            // Format detailed error message
+            let mut msg = String::new();
+            msg.push_str("Destructive changes detected:\n");
+            for dc in &destructive_changes {
+                msg.push_str(&format!("  - {}: {}\n", dc.object_name, dc.reason));
+            }
+            msg.push_str("\nUse --confirm to apply these changes.");
+            return Err(ValkyrinError::DestructiveChange(msg));
+        }
+
         // Execute statements
         Self::execute_migration(db_url, db_type, &statements).await
     }
@@ -2223,6 +2498,9 @@ impl SyncEngine {
         let mut diff = Self::calculate_detailed_diff(&live_schema, &local_ir.entities);
         diff.detected_relations = detected_relations;
 
+        // Compute ResourceSpan for predictive data-loss prevention
+        let spans = Self::compute_spans(&diff, &local_ir.entities);
+
         // Print diff report
         println!("\n{}", "─".repeat(60));
         println!("   📊 Bidirectional Diff Report");
@@ -2259,6 +2537,31 @@ impl SyncEngine {
         if mode == SyncMode::DryRun {
             println!("\n🏁 Dry-run complete. No files were modified.");
             return Ok(());
+        }
+
+        // Create pool for live DB checks
+        let pool = sqlx::Pool::<sqlx::Any>::connect(db_url).await
+            .map_err(from_sqlx)
+            .map_err(|e| ValkyrinError::Database(format!("Failed to connect for live checks: {}", e)))?;
+
+        // Analyze destructive changes with predictive data-loss prevention
+        let destructive_changes = Self::analyze_destructive_changes(
+            &pool,
+            &diff,
+            &spans,
+            &local_ir.entities,
+            db_type,
+        ).await?;
+
+        if !destructive_changes.is_empty() && mode != SyncMode::ApplyAll {
+            // Format detailed error message
+            let mut msg = String::new();
+            msg.push_str("Destructive changes detected:\n");
+            for dc in &destructive_changes {
+                msg.push_str(&format!("  - {}: {}\n", dc.object_name, dc.reason));
+            }
+            msg.push_str("\nUse --confirm to apply these changes.");
+            return Err(ValkyrinError::DestructiveChange(msg));
         }
 
         let has_new_tables = !diff.new_tables.is_empty();
