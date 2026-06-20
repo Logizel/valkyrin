@@ -47,31 +47,103 @@ valkyrin push --url postgresql://user:pass@localhost/db --confirm
 
 ```plantuml
 @startuml
+skinparam packageStyle rectangle
+skinparam shadowing false
+skinparam arrowThickness 2
+
+' ===== TOP LAYER: CLI =====
 package "valkyrin-cli" {
-  [Commands: init, canvas, generate, sync, migrate, push, check, rollback]
+  [Commands:\ninit, canvas, generate,\nsync, migrate, push,\ncheck, rollback] as CLI
 }
-package "valkyrin-server" {
-  [Axum Server :3000] --> [rust-embed UI Assets]
-  [GET /api/load] --> [schema.vdb.json]
-  [POST /api/save] --> [schema.vdb.json]
-}
-package "valkyrin-ui (React Flow)" {
-  [TableNode] --> [PropertiesSidebar]
-  [RelationEdge] --> [1:N / 1:1 / M:N]
-  [Auto-save 2s] --> [schema.vdb.json]
-}
+
+' ===== CORE =====
 package "valkyrin-core" {
-  [Canvas JSON] --> [IR: EntityGraph]
-  [IR] --> [Pass 2: Constraint Injector]
-  [Constraint Injector] --> [FK Columns + Junction Tables]
-  [IR] --> [10 LanguageDrivers] --> [models/*.{go,py,rs,ts,js,prisma}]
-  [AST Merger] --> [Preserves // valkyrin:custom_methods]
-  [Sync Engine] <--> [PostgreSQL / MySQL / SQLite]
-  [Migration Engine] --> [valkyrin.sum + _valkyrin_migrations]
-  [Validator] --> [VAL-001..VAL-021]
+  [Canvas JSON] as CanvasJSON
+  [IR: EntityGraph] as IR
+  
+  package "Compiler Pipeline" {
+    [Pass 1: Parser] as Pass1
+    [Pass 2: Constraint\nInjector] as Pass2
+    [FK Columns +\nJunction Tables] as FKJunction
+    [AST Merger\n(preserves custom code)] as ASTMerger
+    [Validator\n(VAL-001..VAL-021)] as Validator
+    [10 Language Drivers\n→ models/*] as Drivers
+  }
+  
+  package "Sync Engine" {
+    [Diff Engine] as Diff
+    [Spatial Layout\nInjector] as Spatial
+  }
+  
+  package "Migration Engine" {
+    [DAG Topological\nSort] as DAG
+    [Statement\nCheckpoints] as Checkpoints
+    [valkyrin.sum\n(chained SHA-256)] as ValkyrinSum
+    [_valkyrin_migrations\ntable] as MigrationsTable
+  }
 }
-[schema.vdb.json] <--> [Canvas]
-[schema.vdb.json] <--> [Compiler]
+
+' ===== SERVER + UI =====
+package "valkyrin-server" {
+  [Axum Server :3000] as Axum
+  [rust-embed\nUI Assets] as Embed
+  [GET /api/load] as APILoad
+  [POST /api/save] as APISave
+}
+
+package "valkyrin-ui\n(React Flow)" {
+  [TableNode] as TableNode
+  [PropertiesSidebar] as Props
+  [RelationEdge\n1:N / 1:1 / M:N] as Edge
+  [Auto-save 2s] as AutoSave
+}
+
+' ===== EXTERNAL ACTORS =====
+[PostgreSQL] as PG
+[MySQL] as MySQL
+[SQLite] as SQLite
+
+' ===== CENTRAL DATA =====
+[schema.vdb.json] as SchemaVDB
+
+' ===== CONNECTIONS =====
+CLI --> CanvasJSON : commands
+
+CanvasJSON --> IR
+IR --> Pass1
+Pass1 --> Pass2
+Pass2 --> FKJunction
+FKJunction --> IR
+IR --> Drivers
+IR --> ASTMerger
+IR --> Validator
+
+CanvasJSON --> Diff
+Diff --> IR
+Diff --> Spatial
+Spatial --> SchemaVDB
+Diff <--> PG : introspect
+Diff <--> MySQL : introspect
+Diff <--> SQLite : introspect
+
+Drivers --> DAG
+DAG --> Checkpoints
+Checkpoints --> ValkyrinSum
+Checkpoints --> MigrationsTable
+ValkyrinSum --> MigrationsTable
+
+Axum --> Embed
+Axum --> APILoad
+Axum --> APISave
+APILoad --> SchemaVDB
+APISave --> SchemaVDB
+SchemaVDB <--> TableNode
+TableNode --> Props
+TableNode --> Edge
+AutoSave --> SchemaVDB
+
+Drivers --> [models/*.{go,py,rs,ts,js,prisma}] as Output
+
 @enduml
 ```
 
