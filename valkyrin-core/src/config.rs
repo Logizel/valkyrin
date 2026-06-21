@@ -73,7 +73,7 @@ const SUPPORTED_BACKENDS: &[(&str, &[&str])] = &[
     ("go", &["gorm", "ent"]),
     ("python", &["sqlmodel", "sqlalchemy"]),
     ("rust", &["seaorm", "diesel"]),
-    ("typescript", &["typeorm", "prisma"]),
+    ("typescript", &["typeorm", "prisma", "valkyrin"]),
     ("javascript", &["sequelize", "typeorm"]),
 ];
 
