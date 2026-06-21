@@ -20,6 +20,12 @@ pub trait LanguageDriver {
         String::new()
     }
 
+    /// Generates a complete client library for the given entity graph.
+    /// Default implementation does nothing (used by TypeScriptValkyrinDriver).
+    fn generate_full_client(&self, _graph: &EntityGraph, _output_dir: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Maps a referential action to the target language syntax.
     fn map_referential_action(&self, action: &ReferentialAction) -> String {
         match action {
