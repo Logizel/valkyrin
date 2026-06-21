@@ -1,5 +1,5 @@
 // valkyrin-core/src/codegen.rs
-use crate::ir::{DataType, Entity, Field, Relation, RelationType, ReferentialAction};
+use crate::ir::{DataType, Entity, EntityGraph, Field, IntSize, Relation, RelationType, ReferentialAction};
 use anyhow::Result;
 
 /// The universal contract for code generation.
