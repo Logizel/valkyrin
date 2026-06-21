@@ -23,6 +23,7 @@ fn test_entity() -> Entity {
                     is_indexed: false,
                     default_value: None,
                 },
+                is_composite: false,
             },
             Field {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -36,6 +37,7 @@ fn test_entity() -> Entity {
                     is_indexed: false,
                     default_value: None,
                 },
+                is_composite: false,
             },
             Field {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -49,6 +51,7 @@ fn test_entity() -> Entity {
                     is_indexed: false,
                     default_value: None,
                 },
+                is_composite: false,
             },
             Field {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -62,6 +65,7 @@ fn test_entity() -> Entity {
                     is_indexed: false,
                     default_value: None,
                 },
+                is_composite: false,
             },
             Field {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -78,6 +82,7 @@ fn test_entity() -> Entity {
                     is_indexed: false,
                     default_value: None,
                 },
+                is_composite: false,
             },
         ],
     }
@@ -101,6 +106,7 @@ fn test_entity_with_native_enum() -> Entity {
                     is_indexed: false,
                     default_value: None,
                 },
+                is_composite: false,
             },
             Field {
                 id: uuid::Uuid::new_v4().to_string(),
@@ -117,6 +123,7 @@ fn test_entity_with_native_enum() -> Entity {
                     is_indexed: false,
                     default_value: None,
                 },
+                is_composite: false,
             },
         ],
     }
