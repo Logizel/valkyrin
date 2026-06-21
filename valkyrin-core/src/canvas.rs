@@ -100,6 +100,7 @@ impl CanvasPayload {
                         is_indexed: col.is_indexed,
                         default_value: col.default_value.clone(),
                     },
+                    is_composite: false,
                 });
             }
 
