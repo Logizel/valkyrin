@@ -236,12 +236,15 @@ pub fn compile_blueprint() -> Result<()> {
 
     let driver = get_driver(target_backend)?;
 
-    // Special handling for TypeScriptValkyrin: generates a full client library
-    // instead of per-entity model files
     if matches!(target_backend, TargetBackend::TypeScriptValkyrin) {
         let output_dir = "models/valkyrin-client";
-        fs::create_dir_all(output_dir)?;
-        driver.generate_full_client(&ir_graph, output_dir)?;
+        if let Some(files) = driver.generate_full_client(&ir_graph)? {
+            fs::create_dir_all(output_dir)?;
+            for (filename, content) in files {
+                let path = format!("{}/{}", output_dir, filename);
+                fs::write(&path, content)?;
+            }
+        }
         return Ok(());
     }
 
