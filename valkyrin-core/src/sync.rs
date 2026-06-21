@@ -558,6 +558,7 @@ impl DatabaseIntrospector for MysqlIntrospector {
                     is_indexed,
                     default_value: column_default,
                 },
+                is_composite: false,
             });
         }
 
