@@ -2337,8 +2337,37 @@ impl LanguageDriver for TypeScriptValkyrinDriver {
         unimplemented!("TypeScriptValkyrin uses generate_full_client")
     }
 
-    fn generate_full_client(&self, _graph: &EntityGraph) -> ValkyrinResult<Option<Vec<(String, String)>>> {
-        Ok(Some(vec![]))
+    fn generate_enums(&self, graph: &EntityGraph) -> String {
+        let mut enums = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        for entity in &graph.entities {
+            for field in &entity.fields {
+                if let DataType::Enum { values, type_name } = &field.data_type {
+                    let key = type_name.as_deref().unwrap_or(&field.name);
+                    if seen.insert(key.to_string()) {
+                        let enum_name = type_name.clone().unwrap_or_else(|| capitalize_first(&field.name));
+                        let variants = values.iter()
+                            .map(|v| format!("'{}'", v))
+                            .collect::<Vec<_>>()
+                            .join(" | ");
+                        enums.push(format!("  export type {} = {};", enum_name, variants));
+                    }
+                }
+            }
+        }
+
+        if enums.is_empty() {
+            return "// No enums defined\n".to_string();
+        }
+
+        format!("export namespace $Enums {{\n{}\n}}\n", enums.join("\n"))
+    }
+
+    fn generate_full_client(&self, graph: &EntityGraph) -> ValkyrinResult<Option<Vec<(String, String)>>> {
+        Ok(Some(vec![
+            ("enums.ts".to_string(), self.generate_enums(graph)),
+        ]))
     }
 }
 
