@@ -288,6 +288,7 @@ pub fn compile_blueprint() -> Result<()> {
                         is_indexed: false,
                         default_value: None,
                     },
+                    is_composite: false,
                 });
             }
         }
