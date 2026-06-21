@@ -2835,6 +2835,104 @@ interface OrderBy {
         "interface Dialect {\n  buildSelect(query: SelectQuery): { sql: string; params: unknown[] };\n}\n".to_string()
     }
 
+    fn generate_entity_delegate(&self, entity_name: &str, _graph: &EntityGraph) -> String {
+        let lower = self.lower_first(entity_name);
+        format!(r#"class {0}Delegate<ExtArgs extends ValkyrinExtensions = {{}}> {{
+  constructor(
+    private dialect: Dialect,
+    private conn: DatabaseConnection
+  ) {{}}
+
+  async findUnique(
+    args: {0}FindUniqueArgs<ExtArgs>
+  ): Promise<_GetFindResult<{0}Payload<ExtArgs>, {0}FindUniqueArgs<ExtArgs>, 'findUnique'> {{
+    const {{ sql, params }} = this.dialect.buildSelect({{
+      table: '{1}',
+      columns: this.resolveColumns(args),
+      where: args.where ? this.resolveWhere(args.where) : undefined,
+      joins: [],
+      orderBy: [],
+      limit: 1,
+    }});
+    const result = await this.conn.query(sql, params);
+    return result.rows[0] ?? null;
+  }}
+
+  async findMany(
+    args: {0}FindManyArgs<ExtArgs>
+  ): Promise<_GetFindResult<{0}Payload<ExtArgs>, {0}FindManyArgs<ExtArgs>, 'findMany'> {{
+    const {{ sql, params }} = this.dialect.buildSelect({{
+      table: '{1}',
+      columns: this.resolveColumns(args),
+      where: args.where ? this.resolveWhere(args.where) : undefined,
+      joins: [],
+      orderBy: args.orderBy ? this.resolveOrderBy(args.orderBy) : [],
+      limit: args.take,
+      offset: args.skip,
+    }});
+    const result = await this.conn.query(sql, params);
+    return result.rows;
+  }}
+
+  async count(args: {0}FindManyArgs<ExtArgs>): Promise<number> {{
+    const {{ sql, params }} = this.dialect.buildSelect({{
+      table: '{1}',
+      columns: [{{ name: 'COUNT(*)', alias: '_count' }}],
+      where: args.where ? this.resolveWhere(args.where) : undefined,
+      joins: [],
+      orderBy: [],
+    }});
+    const result = await this.conn.query(sql, params);
+    return Number(result.rows[0]._count);
+  }}
+
+  private resolveColumns(args: any): Column[] {{
+    if (args.select) return Object.keys(args.select).map(k => ({{ name: k }}) as Column);
+    return [];
+  }}
+
+  private resolveWhere(where: any): WhereNode {{
+    return where as WhereNode;
+  }}
+
+  private resolveOrderBy(orderBy: any): OrderBy[] {{
+    if (Array.isArray(orderBy)) {{
+      return orderBy.map((o: any) => {{
+        const key = Object.keys(o)[0];
+        return {{ column: key, direction: o[key] as 'ASC' | 'DESC' }};
+      }});
+    }}
+    const key = Object.keys(orderBy)[0];
+    return [{{ column: key, direction: orderBy[key] as 'ASC' | 'DESC' }}];
+  }}
+}}
+"#, entity_name, lower)
+    }
+
+    fn generate_valkyrin_client(&self, graph: &EntityGraph) -> String {
+        let mut out = String::new();
+        out.push_str("interface DatabaseConnection {\n");
+        out.push_str("  query(sql: string, params: unknown[]): Promise<{ rows: any[] }>;\n");
+        out.push_str("}\n\n");
+        out.push_str("class ValkyrinClient<ExtArgs extends ValkyrinExtensions = {}> {\n");
+
+        for entity in &graph.entities {
+            if entity.fields.is_empty() { continue; }
+            let lower = self.lower_first(&entity.name);
+            out.push_str(&format!("  {0}: {1}Delegate<ExtArgs>;\n", lower, entity.name));
+        }
+
+        out.push_str("\n  constructor(dialect: Dialect, conn: DatabaseConnection) {\n");
+        for entity in &graph.entities {
+            if entity.fields.is_empty() { continue; }
+            let lower = self.lower_first(&entity.name);
+            out.push_str(&format!("    this.{0} = new {1}Delegate(dialect, conn);\n", lower, entity.name));
+        }
+        out.push_str("  }\n");
+        out.push_str("}\n");
+        out
+    }
+
     fn generate_pg_dialect(&self) -> String {
         r#"class PgDialect implements Dialect {
   private paramIndex = 0;
@@ -3061,15 +3159,37 @@ impl LanguageDriver for TypeScriptValkyrinDriver {
         out
     }
 
-    fn generate_client(&self, _graph: &EntityGraph) -> String {
+    fn generate_client(&self, graph: &EntityGraph) -> String {
         let mut out = String::new();
         out.push_str("// Valkyrin Client Runtime\n// Generated from schema.vdb.json\n\n");
-        out.push_str("import type { ValkyrinExtensions } from './types';\n\n");
+        out.push_str("import type { ValkyrinExtensions, _GetFindResult } from './types';\n");
+        out.push_str("import type {\n");
+        {
+            let mut first = true;
+            for entity in &graph.entities {
+                if entity.fields.is_empty() { continue; }
+                if !first { out.push_str(",\n"); }
+                first = false;
+                let n = &entity.name;
+                out.push_str(&format!("  {n}FindUniqueArgs, {n}FindManyArgs, {n}Payload", n = n));
+            }
+            out.push_str("\n} from './operations';\n\n");
+        }
         out.push_str(&self.generate_sql_ast_types());
         out.push_str("\n");
         out.push_str(&self.generate_dialect_interface());
         out.push_str("\n");
         out.push_str(&self.generate_pg_dialect());
+        out.push_str("\n");
+        let mut first = true;
+        for entity in &graph.entities {
+            if entity.fields.is_empty() { continue; }
+            if !first { out.push_str("\n"); }
+            first = false;
+            out.push_str(&self.generate_entity_delegate(&entity.name, graph));
+        }
+        out.push_str("\n");
+        out.push_str(&self.generate_valkyrin_client(graph));
         out
     }
 
