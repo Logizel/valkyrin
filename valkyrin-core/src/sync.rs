@@ -732,6 +732,7 @@ impl DatabaseIntrospector for SqliteIntrospector {
                         is_indexed,
                         default_value,
                     },
+                    is_composite: false,
                 });
             }
 
