@@ -31,6 +31,7 @@ const TS_RESERVED: &[&str] = &[
     "function", "if", "import", "in", "instanceof", "new", "null", "return",
     "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void",
     "while", "with",
+    "valkyrinclient", "valkyrin", "delegate", "payload", "extensions",
 ];
 
 fn get_reserved_words(backend: &TargetBackend) -> &'static [&'static str] {
