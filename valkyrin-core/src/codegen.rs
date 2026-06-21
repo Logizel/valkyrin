@@ -2792,6 +2792,57 @@ impl TypeScriptValkyrinDriver {
         format!("export type {}GroupByArgs<ExtArgs extends {{}} = {{\n  where?: {}WhereInput<ExtArgs>;\n  orderBy?: {}OrderByInput<ExtArgs> | {}OrderByInput<ExtArgs>[];\n  take?: number;\n  skip?: number;\n  by: {}GroupByFields[];\n  _count?: {}CountAggregateInput;\n  _avg?: {}AvgAggregateInput;\n  _sum?: {}SumAggregateInput;\n  _min?: {}MinAggregateInput;\n  _max?: {}MaxAggregateInput;\n}};",
             entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name)
     }
+
+    fn generate_sql_ast_types(&self) -> String {
+        r#"interface Column {
+  name: string;
+  alias?: string;
+  table?: string;
+}
+
+interface SelectQuery {
+  table: string;
+  columns: Column[];
+  where?: WhereNode;
+  joins: Join[];
+  orderBy: OrderBy[];
+  limit?: number;
+  offset?: number;
+}
+
+type WhereNode = WhereCondition | { AND: WhereNode[] } | { OR: WhereNode[] } | { NOT: WhereNode };
+
+interface WhereCondition {
+  column: string;
+  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'IN' | 'NOT IN' | 'LIKE' | 'ILIKE' | 'IS NULL' | 'IS NOT NULL';
+  value: unknown;
+}
+
+interface Join {
+  type: 'INNER' | 'LEFT';
+  table: string;
+  on: { left: string; right: string };
+}
+
+interface OrderBy {
+  column: string;
+  direction: 'ASC' | 'DESC';
+}
+"#.to_string()
+    }
+
+    fn generate_dialect_interface(&self) -> String {
+        "interface Dialect {\n  buildSelect(query: SelectQuery): { sql: string; params: unknown[] };\n}\n".to_string()
+    }
+
+    fn generate_pg_dialect(&self) -> String {
+        r#"class PgDialect implements Dialect {
+  buildSelect(query: SelectQuery): { sql: string; params: unknown[] } {
+    return { sql: '', params: [] };
+  }
+}
+"#.to_string()
+    }
 }
 
 impl LanguageDriver for TypeScriptValkyrinDriver {
@@ -2944,10 +2995,23 @@ impl LanguageDriver for TypeScriptValkyrinDriver {
         out
     }
 
+    fn generate_client(&self, _graph: &EntityGraph) -> String {
+        let mut out = String::new();
+        out.push_str("// Valkyrin Client Runtime\n// Generated from schema.vdb.json\n\n");
+        out.push_str("import type { ValkyrinExtensions } from './types';\n\n");
+        out.push_str(&self.generate_sql_ast_types());
+        out.push_str("\n");
+        out.push_str(&self.generate_dialect_interface());
+        out.push_str("\n");
+        out.push_str(&self.generate_pg_dialect());
+        out
+    }
+
     fn generate_index(&self, _graph: &EntityGraph) -> String {
         r#"export * from './types';
 export * from './enums';
 export * from './operations';
+export { ValkyrinClient } from './client';
 "#.to_string()
     }
 
@@ -2956,6 +3020,7 @@ export * from './operations';
             ("enums.ts".to_string(), self.generate_enums(graph)),
             ("types.ts".to_string(), self.generate_types()),
             ("operations.ts".to_string(), self.generate_operations(graph)),
+            ("client.ts".to_string(), self.generate_client(graph)),
             ("index.ts".to_string(), self.generate_index(graph)),
         ]))
     }
