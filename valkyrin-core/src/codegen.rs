@@ -2334,7 +2334,7 @@ impl LanguageDriver for TypeScriptValkyrinDriver {
     }
 
     fn generate_model(&self, _entity: &Entity) -> String {
-        String::new()
+        unimplemented!("TypeScriptValkyrin uses generate_full_client")
     }
 
     fn generate_full_client(&self, _graph: &EntityGraph) -> ValkyrinResult<Option<Vec<(String, String)>>> {
