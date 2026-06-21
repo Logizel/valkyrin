@@ -342,6 +342,7 @@ impl DatabaseIntrospector for PostgresIntrospector {
                     is_indexed,
                     default_value: column_default,
                 },
+                is_composite: false,
             });
         }
 
