@@ -25,7 +25,7 @@ const RUST_RESERVED: &[&str] = &[
     "pub", "ref", "return", "self", "static", "struct", "super", "trait", "true",
     "type", "unsafe", "use", "where", "while",
 ];
-const TS_RESERVED: &[&str] = &[
+pub(crate) const TS_RESERVED: &[&str] = &[
     "break", "case", "catch", "class", "const", "continue", "debugger", "default",
     "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for",
     "function", "if", "import", "in", "instanceof", "new", "null", "return",
@@ -48,7 +48,7 @@ fn get_reserved_words(backend: &TargetBackend) -> &'static [&'static str] {
 }
 
 /// Sanitize an identifier: ensure it's not a reserved keyword, append `_` if it is
-fn sanitize_name(name: &str, backend: &TargetBackend) -> String {
+pub(crate) fn sanitize_name(name: &str, backend: &TargetBackend) -> String {
     let reserved = get_reserved_words(backend);
     if reserved.iter().any(|r| *r == name.to_lowercase()) {
         format!("{}_", name)

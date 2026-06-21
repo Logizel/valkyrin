@@ -1,6 +1,7 @@
 // valkyrin-core/src/codegen.rs
 use crate::ir::{DataType, Entity, EntityGraph, Field, IntSize, Relation, RelationType, ReferentialAction};
 use crate::error::ValkyrinResult;
+use crate::compiler::TS_RESERVED;
 use anyhow::Result;
 use std::collections::HashMap;
 
@@ -2832,12 +2833,49 @@ interface OrderBy {
     }
 
     fn generate_dialect_interface(&self) -> String {
-        "interface Dialect {\n  buildSelect(query: SelectQuery): { sql: string; params: unknown[] };\n}\n".to_string()
+        "export interface Dialect {\n  buildSelect(query: SelectQuery): { sql: string; params: unknown[] };\n}\n".to_string()
+    }
+
+    fn sanitize_property_name(&self, name: &str) -> String {
+        let sanitized: String = name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '_' || c == '$' { c } else { '_' })
+            .collect();
+        let sanitized = if sanitized.is_empty() {
+            "_entity".to_string()
+        } else if sanitized.starts_with(|c: char| c.is_ascii_digit()) {
+            format!("_{}", sanitized)
+        } else {
+            sanitized
+        };
+        let lowered = sanitized.to_lowercase();
+        if TS_RESERVED.iter().any(|r| *r == lowered.as_str()) {
+            format!("{}_", sanitized)
+        } else {
+            sanitized
+        }
+    }
+
+    fn table_name(&self, name: &str) -> String {
+        let sanitized: String = name
+            .chars()
+            .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .collect();
+        if sanitized.is_empty() {
+            "_table".to_string()
+        } else {
+            let mut c = sanitized.chars();
+            match c.next() {
+                None => "_table".to_string(),
+                Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
+            }
+        }
     }
 
     fn generate_entity_delegate(&self, entity_name: &str, _graph: &EntityGraph) -> String {
-        let lower = self.lower_first(entity_name);
-        format!(r#"class {0}Delegate<ExtArgs extends ValkyrinExtensions = {{}}> {{
+        let safe = self.sanitize_property_name(entity_name);
+        let table = self.table_name(entity_name);
+        format!(r#"export class {1}Delegate<ExtArgs extends ValkyrinExtensions = {{}}> {{
   constructor(
     private dialect: Dialect,
     private conn: DatabaseConnection
@@ -2847,7 +2885,7 @@ interface OrderBy {
     args: {0}FindUniqueArgs<ExtArgs>
   ): Promise<_GetFindResult<{0}Payload<ExtArgs>, {0}FindUniqueArgs<ExtArgs>, 'findUnique'> {{
     const {{ sql, params }} = this.dialect.buildSelect({{
-      table: '{1}',
+      table: '{2}',
       columns: this.resolveColumns(args),
       where: args.where ? this.resolveWhere(args.where) : undefined,
       joins: [],
@@ -2862,7 +2900,7 @@ interface OrderBy {
     args: {0}FindManyArgs<ExtArgs>
   ): Promise<_GetFindResult<{0}Payload<ExtArgs>, {0}FindManyArgs<ExtArgs>, 'findMany'> {{
     const {{ sql, params }} = this.dialect.buildSelect({{
-      table: '{1}',
+      table: '{2}',
       columns: this.resolveColumns(args),
       where: args.where ? this.resolveWhere(args.where) : undefined,
       joins: [],
@@ -2876,7 +2914,7 @@ interface OrderBy {
 
   async count(args: {0}FindManyArgs<ExtArgs>): Promise<number> {{
     const {{ sql, params }} = this.dialect.buildSelect({{
-      table: '{1}',
+      table: '{2}',
       columns: [{{ name: 'COUNT(*)', alias: '_count' }}],
       where: args.where ? this.resolveWhere(args.where) : undefined,
       joins: [],
@@ -2906,27 +2944,31 @@ interface OrderBy {
     return [{{ column: key, direction: orderBy[key] as 'ASC' | 'DESC' }}];
   }}
 }}
-"#, entity_name, lower)
+"#, entity_name, safe, table)
     }
 
     fn generate_valkyrin_client(&self, graph: &EntityGraph) -> String {
         let mut out = String::new();
-        out.push_str("interface DatabaseConnection {\n");
+        out.push_str("export interface DatabaseConnection {\n");
         out.push_str("  query(sql: string, params: unknown[]): Promise<{ rows: any[] }>;\n");
         out.push_str("}\n\n");
-        out.push_str("class ValkyrinClient<ExtArgs extends ValkyrinExtensions = {}> {\n");
+        out.push_str("export class ValkyrinClient<ExtArgs extends ValkyrinExtensions = {}> {\n");
 
+        let mut pairs: Vec<(String, String)> = Vec::new();
         for entity in &graph.entities {
             if entity.fields.is_empty() { continue; }
-            let lower = self.lower_first(&entity.name);
-            out.push_str(&format!("  {0}: {1}Delegate<ExtArgs>;\n", lower, entity.name));
+            let safe = self.sanitize_property_name(&entity.name);
+            let prop = self.lower_first(&safe);
+            pairs.push((prop, safe));
+        }
+
+        for (prop, safe) in &pairs {
+            out.push_str(&format!("  {0}: {1}Delegate<ExtArgs>;\n", prop, safe));
         }
 
         out.push_str("\n  constructor(dialect: Dialect, conn: DatabaseConnection) {\n");
-        for entity in &graph.entities {
-            if entity.fields.is_empty() { continue; }
-            let lower = self.lower_first(&entity.name);
-            out.push_str(&format!("    this.{0} = new {1}Delegate(dialect, conn);\n", lower, entity.name));
+        for (prop, safe) in &pairs {
+            out.push_str(&format!("    this.{0} = new {1}Delegate(dialect, conn);\n", prop, safe));
         }
         out.push_str("  }\n");
         out.push_str("}\n");
@@ -2934,7 +2976,7 @@ interface OrderBy {
     }
 
     fn generate_pg_dialect(&self) -> String {
-        r#"class PgDialect implements Dialect {
+        r#"export class PgDialect implements Dialect {
   private paramIndex = 0;
   private params: unknown[] = [];
 
@@ -3193,12 +3235,19 @@ impl LanguageDriver for TypeScriptValkyrinDriver {
         out
     }
 
-    fn generate_index(&self, _graph: &EntityGraph) -> String {
-        r#"export * from './types';
-export * from './enums';
-export * from './operations';
-export { ValkyrinClient } from './client';
-"#.to_string()
+    fn generate_index(&self, graph: &EntityGraph) -> String {
+        let mut out = String::new();
+        out.push_str("export * from './types';\n");
+        out.push_str("export * from './enums';\n");
+        out.push_str("export * from './operations';\n");
+        out.push_str("export {\n  ValkyrinClient,\n  PgDialect,\n  Dialect,\n  DatabaseConnection");
+        for entity in &graph.entities {
+            if entity.fields.is_empty() { continue; }
+            let safe = self.sanitize_property_name(&entity.name);
+            out.push_str(&format!(",\n  {}Delegate", safe));
+        }
+        out.push_str(",\n} from './client';\n");
+        out
     }
 
     fn generate_full_client(&self, graph: &EntityGraph) -> ValkyrinResult<Option<Vec<(String, String)>>> {
