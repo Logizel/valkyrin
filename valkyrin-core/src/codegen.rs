@@ -2364,9 +2364,25 @@ impl LanguageDriver for TypeScriptValkyrinDriver {
         format!("export namespace $Enums {{\n{}\n}}\n", enums.join("\n"))
     }
 
+    fn generate_types(&self) -> String {
+        let mut s = String::new();
+        s.push_str("// Type-level machinery for Valkyrin Client\n\n");
+        s.push_str("export type _XOR<T, U> = T extends U ? never : U extends T ? never : T | U;\n\n");
+        s.push_str("export type _UnwrapPayloadResult<P> = P extends { scalars: infer S; composites: infer C }\n  ? S & C\n  : never;\n\n");
+        s.push_str("export type _ApplyOmit<T, O> = Omit<T, keyof O> & { [K in keyof O as O[K] extends true ? K : never]?: never };\n\n");
+        s.push_str("export type _DefaultSelection<P, Args, GlobalOmit> =\n  Args extends { select: infer S } ? _ApplyOmit<_UnwrapPayloadResult<P>, S> :\n  Args extends { include: infer I } ? _ApplyOmit<_UnwrapPayloadResult<P>, I> :\n  Args extends { omit: infer O } ? _ApplyOmit<_UnwrapPayloadResult<P>, O> :\n  _UnwrapPayloadResult<P>;\n\n");
+        s.push_str("export type _GetFindResult<P, Args, Op, GlobalOmit> =\n  Op extends 'findUnique' ? _DefaultSelection<P, Args, GlobalOmit> | null :\n  Op extends 'findMany' ? _DefaultSelection<P, Args, GlobalOmit>[] :\n  Op extends 'findFirst' ? _DefaultSelection<P, Args, GlobalOmit> | null :\n  Op extends 'create' ? _DefaultSelection<P, Args, GlobalOmit> :\n  Op extends 'update' ? _DefaultSelection<P, Args, GlobalOmit> :\n  Op extends 'upsert' ? _DefaultSelection<P, Args, GlobalOmit> :\n  Op extends 'delete' ? _DefaultSelection<P, Args, GlobalOmit> :\n  never;\n\n");
+        s.push_str("export type _GetPayloadResult<Base, R> = Omit<Base, _ExtensionKeys<R>> & _ExtensionObject<R>;\n\n");
+        s.push_str("export type _ExtensionKeys<R> = R extends { result: infer Res } ? keyof Res : never;\n");
+        s.push_str("export type _ExtensionObject<R> = R extends { result: infer Res } ? Res : {};\n\n");
+        s.push_str("export interface ValkyrinExtensions {\n  result?: Record<string, any>;\n  query?: Record<string, any>;\n}\n");
+        s
+    }
+
     fn generate_full_client(&self, graph: &EntityGraph) -> ValkyrinResult<Option<Vec<(String, String)>>> {
         Ok(Some(vec![
             ("enums.ts".to_string(), self.generate_enums(graph)),
+            ("types.ts".to_string(), self.generate_types()),
         ]))
     }
 }
