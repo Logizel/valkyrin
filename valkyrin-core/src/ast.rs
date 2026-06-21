@@ -22,7 +22,8 @@ impl CodeMerger {
             | TargetBackend::JavaScriptSequelize
             | TargetBackend::JavaScriptTypeOrm
             | TargetBackend::TypeScriptPrisma
-            | TargetBackend::TypeScriptTypeOrm => "//",
+            | TargetBackend::TypeScriptTypeOrm
+            | TargetBackend::TypeScriptValkyrin => "//",
         };
         Self { comment_prefix }
     }
