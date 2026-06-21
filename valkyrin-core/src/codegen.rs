@@ -2837,8 +2837,74 @@ interface OrderBy {
 
     fn generate_pg_dialect(&self) -> String {
         r#"class PgDialect implements Dialect {
+  private paramIndex = 0;
+  private params: unknown[] = [];
+
+  private ident(name: string): string {
+    return `"${name.replace(/"/g, '""')}"`;
+  }
+
+  private cols(columns: Column[]): string {
+    if (columns.length === 0) return '*';
+    return columns.map(c => {
+      const ref = c.table ? `${this.ident(c.table)}.${this.ident(c.name)}` : this.ident(c.name);
+      return c.alias ? `${ref} AS ${this.ident(c.alias)}` : ref;
+    }).join(', ');
+  }
+
+  private param(value: unknown): string {
+    this.params.push(value);
+    return `$${this.paramIndex++}`;
+  }
+
+  private where(node: WhereNode): string {
+    if ('AND' in node) {
+      return `(${node.AND.map(n => this.where(n)).join(' AND ')})`;
+    }
+    if ('OR' in node) {
+      return `(${node.OR.map(n => this.where(n)).join(' OR ')})`;
+    }
+    if ('NOT' in node) {
+      return `NOT (${this.where(node.NOT)})`;
+    }
+    const c = node as WhereCondition;
+    const ident = this.ident(c.column);
+    switch (c.operator) {
+      case 'IS NULL': return `${ident} IS NULL`;
+      case 'IS NOT NULL': return `${ident} IS NOT NULL`;
+      default: return `${ident} ${c.operator} ${this.param(c.value)}`;
+    }
+  }
+
+  private joins(joins: Join[]): string {
+    return joins.map(j => {
+      const kind = j.type === 'INNER' ? 'INNER JOIN' : 'LEFT JOIN';
+      return `${kind} ${this.ident(j.table)} ON ${this.ident(j.on.left)} = ${this.ident(j.on.right)}`;
+    }).join(' ');
+  }
+
+  private order(orderBy: OrderBy[]): string {
+    return orderBy.map(o => `${this.ident(o.column)} ${o.direction}`).join(', ');
+  }
+
   buildSelect(query: SelectQuery): { sql: string; params: unknown[] } {
-    return { sql: '', params: [] };
+    this.paramIndex = 1;
+    this.params = [];
+    const parts: string[] = [];
+    parts.push('SELECT');
+    parts.push(this.cols(query.columns));
+    parts.push('FROM');
+    parts.push(this.ident(query.table));
+    if (query.joins.length > 0) parts.push(this.joins(query.joins));
+    if (query.where) { parts.push('WHERE'); parts.push(this.where(query.where)); }
+    if (query.orderBy.length > 0) { parts.push('ORDER BY'); parts.push(this.order(query.orderBy)); }
+    if (query.limit !== undefined) {
+      parts.push(`LIMIT ${this.param(query.limit)}`);
+    }
+    if (query.offset !== undefined) {
+      parts.push(`OFFSET ${this.param(query.offset)}`);
+    }
+    return { sql: parts.join(' '), params: this.params };
   }
 }
 "#.to_string()
