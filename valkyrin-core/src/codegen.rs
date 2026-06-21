@@ -2,6 +2,7 @@
 use crate::ir::{DataType, Entity, EntityGraph, Field, IntSize, Relation, RelationType, ReferentialAction};
 use crate::error::ValkyrinResult;
 use anyhow::Result;
+use std::collections::HashMap;
 
 /// The universal contract for code generation.
 pub trait LanguageDriver {
@@ -2303,6 +2304,496 @@ impl LanguageDriver for TypeScriptTypeOrmDriver {
 
 pub struct TypeScriptValkyrinDriver;
 
+struct RelationMeta {
+    target_name: String,
+    rel_type: RelationType,
+}
+
+impl TypeScriptValkyrinDriver {
+    fn lower_first(&self, s: &str) -> String {
+        let mut c = s.chars();
+        match c.next() {
+            None => String::new(),
+            Some(f) => f.to_lowercase().collect::<String>() + c.as_str(),
+        }
+    }
+
+    fn get_field_ts_type(&self, field: &Field) -> String {
+        self.map_data_type(&field.data_type, field.constraints.is_nullable)
+    }
+
+    fn build_relation_map(&self, graph: &EntityGraph, entity: &Entity) -> HashMap<String, RelationMeta> {
+        let mut map = HashMap::new();
+        for rel in &graph.relations {
+            let is_source = rel.source_entity_id == entity.id;
+            let is_target = rel.target_entity_id == entity.id;
+            if is_source || is_target {
+                let (target_id, target_field, source_field, rtype, is_src) = if is_source {
+                    (&rel.target_entity_id, &rel.target_field_name, &rel.source_field_name, rel.relation_type.clone(), true)
+                } else {
+                    (&rel.source_entity_id, &rel.source_field_name, &rel.target_field_name, rel.relation_type.clone(), false)
+                };
+                if let Some(target_entity) = graph.entities.iter().find(|e| e.id == *target_id) {
+                    let field_name = if is_src { source_field } else { target_field };
+                    map.insert(field_name.clone(), RelationMeta {
+                        target_name: target_entity.name.clone(),
+                        rel_type: rtype,
+                    });
+                }
+            }
+        }
+        map
+    }
+
+    fn partition_fields<'a>(
+        &self,
+        entity: &'a Entity,
+        relations: &HashMap<String, RelationMeta>,
+    ) -> (Vec<&'a Field>, Vec<&'a Field>, Vec<&'a Field>) {
+        let mut scalars = Vec::new();
+        let mut objects = Vec::new();
+        let mut composites = Vec::new();
+        for field in &entity.fields {
+            if relations.contains_key(&field.name) {
+                objects.push(field);
+            } else if field.is_composite || matches!(field.data_type, DataType::Json) {
+                composites.push(field);
+            } else {
+                scalars.push(field);
+            }
+        }
+        (scalars, objects, composites)
+    }
+
+    fn generate_payload_type(
+        &self,
+        entity_name: &str,
+        scalars: &[&Field],
+        objects: &[&Field],
+        composites: &[&Field],
+        graph: &EntityGraph,
+    ) -> String {
+        let mut out = String::new();
+        let camel = self.lower_first(entity_name);
+
+        let scalar_fields: Vec<String> = scalars.iter()
+            .map(|f| format!("    {}: {};", f.name, self.get_field_ts_type(f)))
+            .collect();
+
+        let composite_fields: Vec<String> = composites.iter()
+            .map(|f| format!("    {}: {};", f.name, self.get_field_ts_type(f)))
+            .collect();
+
+        let object_fields: Vec<String> = objects.iter()
+            .map(|f| {
+                let rels = self.build_relation_map(graph, &Entity {
+                    id: String::new(),
+                    name: entity_name.to_string(),
+                    fields: vec![],
+                });
+                if let Some(rel) = rels.get(&f.name) {
+                    let tn = &rel.target_name;
+                    match rel.rel_type {
+                        RelationType::OneToMany | RelationType::ManyToMany => {
+                            format!("    {}: {}Payload<ExtArgs>[];", f.name, tn)
+                        }
+                        RelationType::OneToOne => {
+                            format!("    {}: {}Payload<ExtArgs> | null;", f.name, tn)
+                        }
+                    }
+                } else {
+                    format!("    {}: any;", f.name)
+                }
+            })
+            .collect();
+
+        out.push_str(&format!("export type {}Payload<ExtArgs extends ValkyrinExtensions = {{}}> = {{\n  name: \"{}\";\n", entity_name, entity_name));
+        out.push_str(&format!("  scalars: _GetPayloadResult<{{\n{}\n  }}, ExtArgs['result']['{}']>;\n", scalar_fields.join("\n"), camel));
+        if !composite_fields.is_empty() {
+            out.push_str(&format!("  composites: {{\n{}\n  }};\n", composite_fields.join("\n")));
+        }
+        if !object_fields.is_empty() {
+            out.push_str(&format!("  objects: {{\n{}\n  }};\n", object_fields.join("\n")));
+        }
+        out.push_str("};");
+        out
+    }
+
+    fn generate_select_type(
+        &self,
+        entity_name: &str,
+        scalars: &[&Field],
+        objects: &[&Field],
+        composites: &[&Field],
+        graph: &EntityGraph,
+    ) -> String {
+        let scalar_fields: Vec<String> = scalars.iter()
+            .map(|f| format!("    {}?: boolean;", f.name))
+            .collect();
+
+        let composite_fields: Vec<String> = composites.iter()
+            .map(|f| format!("    {}?: boolean;", f.name))
+            .collect();
+
+        let object_fields: Vec<String> = objects.iter()
+            .map(|f| {
+                let rels = self.build_relation_map(graph, &Entity {
+                    id: String::new(),
+                    name: entity_name.to_string(),
+                    fields: vec![],
+                });
+                if let Some(rel) = rels.get(&f.name) {
+                    format!("    {}?: boolean | {}Select<ExtArgs>;", f.name, rel.target_name)
+                } else {
+                    format!("    {}?: boolean;", f.name)
+                }
+            })
+            .collect();
+
+        let mut out = format!("export type {}Select<ExtArgs extends {{}} = {{> = {{\n", entity_name);
+        let mut has_any = false;
+
+        if !scalar_fields.is_empty() {
+            out.push_str(&format!("  scalars?: {{\n{}\n  }};\n", scalar_fields.join("\n")));
+            has_any = true;
+        }
+        if !composite_fields.is_empty() {
+            out.push_str(&format!("  composites?: {{\n{}\n  }};\n", composite_fields.join("\n")));
+            has_any = true;
+        }
+        if !object_fields.is_empty() {
+            out.push_str(&format!("  objects?: {{\n{}\n  }};\n", object_fields.join("\n")));
+            has_any = true;
+        }
+
+        if !has_any {
+            return format!("export type {}Select<ExtArgs extends {{}} = {{}};", entity_name);
+        }
+
+        out.push_str("};");
+        out
+    }
+
+    fn generate_include_type(
+        &self,
+        entity_name: &str,
+        objects: &[&Field],
+        graph: &EntityGraph,
+    ) -> String {
+        if objects.is_empty() {
+            return format!("export type {}Include<ExtArgs extends {{}} = {{}};", entity_name);
+        }
+
+        let object_fields: Vec<String> = objects.iter()
+            .map(|f| {
+                let rels = self.build_relation_map(graph, &Entity {
+                    id: String::new(),
+                    name: entity_name.to_string(),
+                    fields: vec![],
+                });
+                if let Some(rel) = rels.get(&f.name) {
+                    format!("    {}?: boolean | {}Include<ExtArgs>;", f.name, rel.target_name)
+                } else {
+                    format!("    {}?: boolean;", f.name)
+                }
+            })
+            .collect();
+
+        format!("export type {}Include<ExtArgs extends {{}} = {{> = {{\n  objects?: {{\n{}\n  }};\n}};", entity_name, object_fields.join("\n"))
+    }
+
+    fn generate_omit_type(
+        &self,
+        entity_name: &str,
+        scalars: &[&Field],
+        composites: &[&Field],
+    ) -> String {
+        let mut omit_fields: Vec<String> = Vec::new();
+        for f in scalars {
+            omit_fields.push(format!("    {}?: boolean;", f.name));
+        }
+        for f in composites {
+            omit_fields.push(format!("    {}?: boolean;", f.name));
+        }
+
+        if omit_fields.is_empty() {
+            return format!("export type {}Omit<ExtArgs extends {{}} = {{}};", entity_name);
+        }
+
+        format!("export type {}Omit<ExtArgs extends {{}} = {{> = {{\n  scalars?: {{\n{}\n  }};\n}};", entity_name, omit_fields.join("\n"))
+    }
+
+    fn get_field_operators(&self, field: &Field) -> String {
+        match &field.data_type {
+            DataType::String { .. } | DataType::Text => {
+                "{ equals?: string; notEquals?: string; in?: string[]; notIn?: string[]; lt?: string; lte?: string; gt?: string; gte?: string; contains?: string; startsWith?: string; endsWith?: string; isNull?: boolean; }".to_string()
+            }
+            DataType::Integer(_) | DataType::Float | DataType::Decimal { .. } => {
+                "{ equals?: number; notEquals?: number; in?: number[]; notIn?: number[]; lt?: number; lte?: number; gt?: number; gte?: number; isNull?: boolean; }".to_string()
+            }
+            DataType::Boolean => {
+                "{ equals?: boolean; notEquals?: boolean; isNull?: boolean; }".to_string()
+            }
+            DataType::DateTime => {
+                "{ equals?: Date; notEquals?: Date; in?: Date[]; notIn?: Date[]; lt?: Date; lte?: Date; gt?: Date; gte?: Date; isNull?: boolean; }".to_string()
+            }
+            DataType::Uuid => {
+                "{ equals?: string; notEquals?: string; in?: string[]; notIn?: string[]; isNull?: boolean; }".to_string()
+            }
+            DataType::Json => {
+                "{ equals?: Record<string, unknown>; notEquals?: Record<string, unknown>; isNull?: boolean; }".to_string()
+            }
+            DataType::Enum { .. } => {
+                let et = self.get_field_ts_type(field);
+                format!("{{ equals?: {}; notEquals?: {}; in?: {}[]; notIn?: {}[]; isNull?: boolean; }}", et, et, et, et)
+            }
+        }
+    }
+
+    fn generate_where_type(
+        &self,
+        entity_name: &str,
+        scalars: &[&Field],
+        objects: &[&Field],
+        graph: &EntityGraph,
+    ) -> String {
+        let scalar_conditions: Vec<String> = scalars.iter()
+            .map(|f| format!("    {}?: {};", f.name, self.get_field_operators(f)))
+            .collect();
+
+        let object_conditions: Vec<String> = objects.iter()
+            .map(|f| {
+                let rels = self.build_relation_map(graph, &Entity {
+                    id: String::new(),
+                    name: entity_name.to_string(),
+                    fields: vec![],
+                });
+                if let Some(rel) = rels.get(&f.name) {
+                    let tn = &rel.target_name;
+                    match rel.rel_type {
+                        RelationType::OneToMany | RelationType::ManyToMany => {
+                            format!("    {}?: {{ some?: {}WhereInput<ExtArgs>; none?: {}WhereInput<ExtArgs>; every?: {}WhereInput<ExtArgs>; }};", f.name, tn, tn, tn)
+                        }
+                        RelationType::OneToOne => {
+                            format!("    {}?: {{ is?: {}WhereInput<ExtArgs>; isNull?: boolean; }};", f.name, tn)
+                        }
+                    }
+                } else {
+                    format!("    {}?: any;", f.name)
+                }
+            })
+            .collect();
+
+        let mut out = format!("export type {}WhereInput<ExtArgs> = {{\n", entity_name);
+        out.push_str(&format!("  AND?: {}WhereInput<ExtArgs>[];\n", entity_name));
+        out.push_str(&format!("  OR?: {}WhereInput<ExtArgs>[];\n", entity_name));
+        out.push_str(&format!("  NOT?: {}WhereInput<ExtArgs> | {}WhereInput<ExtArgs>[];\n", entity_name, entity_name));
+
+        if !scalar_conditions.is_empty() {
+            out.push_str(&format!("  scalars?: {{\n{}\n  }};\n", scalar_conditions.join("\n")));
+        }
+        if !object_conditions.is_empty() {
+            out.push_str(&format!("  objects?: {{\n{}\n  }};\n", object_conditions.join("\n")));
+        }
+
+        out.push_str("};");
+        out
+    }
+
+    fn generate_orderby_type(&self, entity_name: &str, scalars: &[&Field]) -> String {
+        let scalar_fields: Vec<String> = scalars.iter()
+            .map(|f| format!("    {}?: 'asc' | 'desc';", f.name))
+            .collect();
+
+        if scalar_fields.is_empty() {
+            return format!("export type {}OrderByInput<ExtArgs> = {{}};", entity_name);
+        }
+
+        format!("export type {}OrderByInput<ExtArgs> = {{\n  scalars?: {{\n{}\n  }};\n}};", entity_name, scalar_fields.join("\n"))
+    }
+
+    fn generate_where_unique_input(&self, entity_name: &str, scalars: &[&Field]) -> String {
+        let pk_fields: Vec<String> = scalars.iter()
+            .filter(|f| f.constraints.is_primary_key)
+            .map(|f| format!("  {}?: {};", f.name, self.get_field_ts_type(f)))
+            .collect();
+
+        if pk_fields.is_empty() {
+            return format!("export type {}WhereUniqueInput<ExtArgs> = {{}};", entity_name);
+        }
+
+        format!("export type {}WhereUniqueInput<ExtArgs> = {{\n{}\n}};", entity_name, pk_fields.join("\n"))
+    }
+
+    fn generate_create_input(&self, entity_name: &str, scalars: &[&Field], objects: &[&Field], composites: &[&Field], graph: &EntityGraph) -> String {
+        let scalar_fields: Vec<String> = scalars.iter()
+            .filter(|f| !f.constraints.is_primary_key || f.constraints.default_value.is_some())
+            .map(|f| {
+                let opt = if f.constraints.is_nullable || f.constraints.default_value.is_some() { "?" } else { "" };
+                format!("    {}{}: {};", f.name, opt, self.get_field_ts_type(f))
+            })
+            .collect();
+
+        let composite_fields: Vec<String> = composites.iter()
+            .map(|f| {
+                let opt = if f.constraints.is_nullable { "?" } else { "" };
+                format!("    {}{}: {};", f.name, opt, self.get_field_ts_type(f))
+            })
+            .collect();
+
+        let object_fields: Vec<String> = objects.iter()
+            .map(|f| {
+                let rels = self.build_relation_map(graph, &Entity {
+                    id: String::new(),
+                    name: entity_name.to_string(),
+                    fields: vec![],
+                });
+                if let Some(rel) = rels.get(&f.name) {
+                    let tn = &rel.target_name;
+                    match rel.rel_type {
+                        RelationType::OneToMany | RelationType::ManyToMany => {
+                            format!("    {}?: {{ create?: {}CreateInput<ExtArgs>[]; connect?: {}WhereUniqueInput<ExtArgs>[]; }};", f.name, tn, tn)
+                        }
+                        RelationType::OneToOne => {
+                            format!("    {}?: {{ create?: {}CreateInput<ExtArgs>; connect?: {}WhereUniqueInput<ExtArgs>; }};", f.name, tn, tn)
+                        }
+                    }
+                } else {
+                    format!("    {}?: any;", f.name)
+                }
+            })
+            .collect();
+
+        let mut out = format!("export type {}CreateInput<ExtArgs> = {{\n", entity_name);
+        if !scalar_fields.is_empty() {
+            out.push_str(&format!("  scalars: {{\n{}\n  }};\n", scalar_fields.join("\n")));
+        }
+        if !composite_fields.is_empty() {
+            out.push_str(&format!("  composites: {{\n{}\n  }};\n", composite_fields.join("\n")));
+        }
+        if !object_fields.is_empty() {
+            out.push_str(&format!("  objects: {{\n{}\n  }};\n", object_fields.join("\n")));
+        }
+        out.push_str("};");
+        out
+    }
+
+    fn generate_update_input(&self, entity_name: &str, scalars: &[&Field], objects: &[&Field], composites: &[&Field], graph: &EntityGraph) -> String {
+        let scalar_fields: Vec<String> = scalars.iter()
+            .filter(|f| !f.constraints.is_primary_key)
+            .map(|f| format!("    {}?: {};", f.name, self.get_field_ts_type(f)))
+            .collect();
+
+        let composite_fields: Vec<String> = composites.iter()
+            .map(|f| format!("    {}?: {};", f.name, self.get_field_ts_type(f)))
+            .collect();
+
+        let object_fields: Vec<String> = objects.iter()
+            .map(|f| {
+                let rels = self.build_relation_map(graph, &Entity {
+                    id: String::new(),
+                    name: entity_name.to_string(),
+                    fields: vec![],
+                });
+                if let Some(rel) = rels.get(&f.name) {
+                    let tn = &rel.target_name;
+                    match rel.rel_type {
+                        RelationType::OneToMany | RelationType::ManyToMany => {
+                            format!("    {}?: {{ create?: {}CreateInput<ExtArgs>[]; connect?: {}WhereUniqueInput<ExtArgs>[]; disconnect?: {}WhereUniqueInput<ExtArgs>[]; delete?: {}WhereUniqueInput<ExtArgs>[]; update?: {}UpdateInput<ExtArgs>[]; set?: {}WhereUniqueInput<ExtArgs>[]; }};", f.name, tn, tn, tn, tn, tn, tn)
+                        }
+                        RelationType::OneToOne => {
+                            format!("    {}?: {{ create?: {}CreateInput<ExtArgs>; connect?: {}WhereUniqueInput<ExtArgs>; disconnect?: boolean; delete?: boolean; update?: {}UpdateInput<ExtArgs>; }};", f.name, tn, tn, tn)
+                        }
+                    }
+                } else {
+                    format!("    {}?: any;", f.name)
+                }
+            })
+            .collect();
+
+        let mut out = format!("export type {}UpdateInput<ExtArgs> = {{\n", entity_name);
+        if !scalar_fields.is_empty() {
+            out.push_str(&format!("  scalars: {{\n{}\n  }};\n", scalar_fields.join("\n")));
+        }
+        if !composite_fields.is_empty() {
+            out.push_str(&format!("  composites: {{\n{}\n  }};\n", composite_fields.join("\n")));
+        }
+        if !object_fields.is_empty() {
+            out.push_str(&format!("  objects: {{\n{}\n  }};\n", object_fields.join("\n")));
+        }
+        out.push_str("};");
+        out
+    }
+
+    fn generate_aggregate_inputs(&self, entity_name: &str, scalars: &[&Field]) -> String {
+        let count_fields: Vec<String> = scalars.iter()
+            .map(|f| format!("    {}?: boolean;", f.name))
+            .collect();
+
+        let numeric_fields: Vec<String> = scalars.iter()
+            .filter(|f| matches!(f.data_type, DataType::Integer(_) | DataType::Float | DataType::Decimal { .. }))
+            .map(|f| format!("    {}?: boolean;", f.name))
+            .collect();
+
+        let count = format!("export type {}CountAggregateInput = {{\n  scalars?: {{\n{}\n  }};\n}};\n\n", entity_name, count_fields.join("\n"));
+
+        if !numeric_fields.is_empty() {
+            let nf = numeric_fields.join("\n");
+            format!("{}{}{}{}{}",
+                count,
+                format!("export type {}AvgAggregateInput = {{\n  scalars?: {{\n{}\n  }};\n}};\n\n", entity_name, nf),
+                format!("export type {}SumAggregateInput = {{\n  scalars?: {{\n{}\n  }};\n}};\n\n", entity_name, nf),
+                format!("export type {}MinAggregateInput = {{\n  scalars?: {{\n{}\n  }};\n}};\n\n", entity_name, nf),
+                format!("export type {}MaxAggregateInput = {{\n  scalars?: {{\n{}\n  }};\n}};\n\n", entity_name, nf),
+            )
+        } else {
+            format!("{}export type {}AvgAggregateInput = {{}};\n\nexport type {}SumAggregateInput = {{}};\n\nexport type {}MinAggregateInput = {{}};\n\nexport type {}MaxAggregateInput = {{}};\n\n",
+                count, entity_name, entity_name, entity_name, entity_name)
+        }
+    }
+
+    fn generate_find_unique_args(&self, entity_name: &str) -> String {
+        format!("export type {}FindUniqueArgs<ExtArgs extends {{}} = {{\n  where: {}WhereUniqueInput<ExtArgs>;\n  select?: {}Select<ExtArgs>;\n  include?: {}Include<ExtArgs>;\n  omit?: {}Omit<ExtArgs>;\n}};",
+            entity_name, entity_name, entity_name, entity_name, entity_name)
+    }
+
+    fn generate_find_many_args(&self, entity_name: &str, scalars: &[&Field], objects: &[&Field], graph: &EntityGraph) -> String {
+        let _ = (scalars, objects, graph);
+        format!("export type {}FindManyArgs<ExtArgs extends {{}} = {{\n  where?: {}WhereInput<ExtArgs>;\n  orderBy?: {}OrderByInput<ExtArgs> | {}OrderByInput<ExtArgs>[];\n  take?: number;\n  skip?: number;\n  select?: {}Select<ExtArgs>;\n  include?: {}Include<ExtArgs>;\n  omit?: {}Omit<ExtArgs>;\n}};",
+            entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name)
+    }
+
+    fn generate_create_args(&self, entity_name: &str) -> String {
+        format!("export type {}CreateArgs<ExtArgs extends {{}} = {{\n  data: {}CreateInput<ExtArgs>;\n  select?: {}Select<ExtArgs>;\n  include?: {}Include<ExtArgs>;\n  omit?: {}Omit<ExtArgs>;\n}};",
+            entity_name, entity_name, entity_name, entity_name, entity_name)
+    }
+
+    fn generate_update_args(&self, entity_name: &str) -> String {
+        format!("export type {}UpdateArgs<ExtArgs extends {{}} = {{\n  where: {}WhereUniqueInput<ExtArgs>;\n  data: {}UpdateInput<ExtArgs>;\n  select?: {}Select<ExtArgs>;\n  include?: {}Include<ExtArgs>;\n  omit?: {}Omit<ExtArgs>;\n}};",
+            entity_name, entity_name, entity_name, entity_name, entity_name, entity_name)
+    }
+
+    fn generate_delete_args(&self, entity_name: &str) -> String {
+        format!("export type {}DeleteArgs<ExtArgs extends {{}} = {{\n  where: {}WhereUniqueInput<ExtArgs>;\n  select?: {}Select<ExtArgs>;\n  include?: {}Include<ExtArgs>;\n  omit?: {}Omit<ExtArgs>;\n}};",
+            entity_name, entity_name, entity_name, entity_name, entity_name)
+    }
+
+    fn generate_upsert_args(&self, entity_name: &str) -> String {
+        format!("export type {}UpsertArgs<ExtArgs extends {{}} = {{\n  where: {}WhereUniqueInput<ExtArgs>;\n  create: {}CreateInput<ExtArgs>;\n  update: {}UpdateInput<ExtArgs>;\n  select?: {}Select<ExtArgs>;\n  include?: {}Include<ExtArgs>;\n  omit?: {}Omit<ExtArgs>;\n}};",
+            entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name)
+    }
+
+    fn generate_aggregate_args(&self, entity_name: &str) -> String {
+        format!("export type {}AggregateArgs<ExtArgs extends {{}} = {{\n  where?: {}WhereInput<ExtArgs>;\n  orderBy?: {}OrderByInput<ExtArgs> | {}OrderByInput<ExtArgs>[];\n  take?: number;\n  skip?: number;\n  _count?: boolean | {}CountAggregateInput;\n  _avg?: {}AvgAggregateInput;\n  _sum?: {}SumAggregateInput;\n  _min?: {}MinAggregateInput;\n  _max?: {}MaxAggregateInput;\n}};",
+            entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name)
+    }
+
+    fn generate_group_by_args(&self, entity_name: &str) -> String {
+        format!("export type {}GroupByArgs<ExtArgs extends {{}} = {{\n  where?: {}WhereInput<ExtArgs>;\n  orderBy?: {}OrderByInput<ExtArgs> | {}OrderByInput<ExtArgs>[];\n  take?: number;\n  skip?: number;\n  by: {}GroupByFields[];\n  _count?: {}CountAggregateInput;\n  _avg?: {}AvgAggregateInput;\n  _sum?: {}SumAggregateInput;\n  _min?: {}MinAggregateInput;\n  _max?: {}MaxAggregateInput;\n}};",
+            entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name, entity_name)
+    }
+}
+
 impl LanguageDriver for TypeScriptValkyrinDriver {
     fn map_data_type(&self, data_type: &DataType, is_nullable: bool) -> String {
         let base_type = match data_type {
@@ -2379,10 +2870,93 @@ impl LanguageDriver for TypeScriptValkyrinDriver {
         s
     }
 
+    fn generate_operations(&self, graph: &EntityGraph) -> String {
+        let mut out = String::new();
+        out.push_str("// Operations types for Valkyrin Client\n");
+        out.push_str("// Generated from schema.vdb.json\n\n");
+        out.push_str("import type { ValkyrinExtensions, _GetPayloadResult, _GetFindResult } from './types';\n");
+        out.push_str("import type { $Enums } from './enums';\n\n");
+
+        for entity in &graph.entities {
+            if entity.fields.is_empty() {
+                continue;
+            }
+
+            let entity_name = &entity.name;
+            let relations = self.build_relation_map(graph, entity);
+            let (scalars, objects, composites) = self.partition_fields(entity, &relations);
+
+            out.push_str(&self.generate_payload_type(entity_name, &scalars, &objects, &composites, graph));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_select_type(entity_name, &scalars, &objects, &composites, graph));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_include_type(entity_name, &objects, graph));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_omit_type(entity_name, &scalars, &composites));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_where_type(entity_name, &scalars, &objects, graph));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_orderby_type(entity_name, &scalars));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_find_unique_args(entity_name));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_find_many_args(entity_name, &scalars, &objects, graph));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_create_args(entity_name));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_update_args(entity_name));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_delete_args(entity_name));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_upsert_args(entity_name));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_where_unique_input(entity_name, &scalars));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_create_input(entity_name, &scalars, &objects, &composites, graph));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_update_input(entity_name, &scalars, &objects, &composites, graph));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_aggregate_inputs(entity_name, &scalars));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_aggregate_args(entity_name));
+            out.push_str("\n\n");
+
+            out.push_str(&self.generate_group_by_args(entity_name));
+            out.push_str("\n\n");
+        }
+
+        out
+    }
+
+    fn generate_index(&self, _graph: &EntityGraph) -> String {
+        r#"export * from './types';
+export * from './enums';
+export * from './operations';
+"#.to_string()
+    }
+
     fn generate_full_client(&self, graph: &EntityGraph) -> ValkyrinResult<Option<Vec<(String, String)>>> {
         Ok(Some(vec![
             ("enums.ts".to_string(), self.generate_enums(graph)),
             ("types.ts".to_string(), self.generate_types()),
+            ("operations.ts".to_string(), self.generate_operations(graph)),
+            ("index.ts".to_string(), self.generate_index(graph)),
         ]))
     }
 }
