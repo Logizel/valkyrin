@@ -182,6 +182,7 @@ pub fn compile_blueprint() -> Result<()> {
                         is_indexed: true,
                         default_value: None,
                     },
+                    is_composite: false,
                 });
                 
                 // Second FK column
