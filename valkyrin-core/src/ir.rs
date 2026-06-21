@@ -50,6 +50,7 @@ pub struct Field {
     pub name: String,
     pub data_type: DataType,
     pub constraints: Constraints,
+    pub is_composite: bool,
 }
 
 #[derive(Debug, Clone)]
