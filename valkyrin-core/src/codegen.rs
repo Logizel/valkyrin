@@ -36,6 +36,31 @@ pub trait LanguageDriver {
             ReferentialAction::SetDefault => "SET DEFAULT".to_string(),
         }
     }
+
+    /// Generates enums file (TypeScriptValkyrin only)
+    fn generate_enums(&self, _graph: &EntityGraph) -> String {
+        String::new()
+    }
+
+    /// Generates types file with type-level machinery (TypeScriptValkyrin only)
+    fn generate_types(&self) -> String {
+        String::new()
+    }
+
+    /// Generates operations file with Select/Include/Omit/Args types (TypeScriptValkyrin only)
+    fn generate_operations(&self, _graph: &EntityGraph) -> String {
+        String::new()
+    }
+
+    /// Generates client runtime file (TypeScriptValkyrin only)
+    fn generate_client(&self, _graph: &EntityGraph) -> String {
+        String::new()
+    }
+
+    /// Generates index.ts barrel export (TypeScriptValkyrin only)
+    fn generate_index(&self, _graph: &EntityGraph) -> String {
+        String::new()
+    }
 }
 
 pub struct GoGormDriver;
