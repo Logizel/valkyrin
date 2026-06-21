@@ -3351,5 +3351,6 @@ pub fn get_driver(backend: TargetBackend) -> Result<Box<dyn LanguageDriver>> {
         TargetBackend::JavaScriptTypeOrm => Ok(Box::new(JavaScriptTypeOrmDriver)),
         TargetBackend::TypeScriptPrisma => Ok(Box::new(TypeScriptPrismaDriver)),
         TargetBackend::TypeScriptTypeOrm => Ok(Box::new(TypeScriptTypeOrmDriver)),
+        TargetBackend::TypeScriptValkyrin => Ok(Box::new(TypeScriptValkyrinDriver)),
     }
 }
