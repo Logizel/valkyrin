@@ -225,6 +225,7 @@ pub fn compile_blueprint() -> Result<()> {
         ("rust", Some("diesel")) => TargetBackend::RustDiesel,
         ("rust", _) => TargetBackend::RustSeaOrm,
         ("typescript", Some("prisma")) => TargetBackend::TypeScriptPrisma,
+        ("typescript", Some("valkyrin")) => TargetBackend::TypeScriptValkyrin,
         ("typescript", _) => TargetBackend::TypeScriptTypeOrm,
         ("javascript", Some("typeorm")) => TargetBackend::JavaScriptTypeOrm,
         ("javascript", _) => TargetBackend::JavaScriptSequelize,
