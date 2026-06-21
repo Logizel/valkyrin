@@ -66,6 +66,7 @@ fn arb_field() -> impl Strategy<Value = Field> {
             name,
             data_type: dt,
             constraints: cons,
+            is_composite: false,
         })
 }
 
