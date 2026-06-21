@@ -42,7 +42,8 @@ fn get_reserved_words(backend: &TargetBackend) -> &'static [&'static str] {
         TargetBackend::TypeScriptPrisma
         | TargetBackend::TypeScriptTypeOrm
         | TargetBackend::JavaScriptSequelize
-        | TargetBackend::JavaScriptTypeOrm => TS_RESERVED,
+        | TargetBackend::JavaScriptTypeOrm
+        | TargetBackend::TypeScriptValkyrin => TS_RESERVED,
     }
 }
 
