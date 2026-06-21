@@ -3336,6 +3336,7 @@ pub enum TargetBackend {
     JavaScriptTypeOrm,
     TypeScriptPrisma,
     TypeScriptTypeOrm,
+    TypeScriptValkyrin,
 }
 
 pub fn get_driver(backend: TargetBackend) -> Result<Box<dyn LanguageDriver>> {
