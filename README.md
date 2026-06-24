@@ -2,7 +2,7 @@
 
 **Local-First Visual Database Architect** — Design schemas visually, generate production-ready ORM code for 10 targets.
 
-Single binary · Embedded React UI · Zero cloud · Zero AI
+Single binary · Embedded React UI · Zero cloud · Zero AI · Zero telemetry
 
 [![Rust](https://img.shields.io/badge/rust-1.92%2B-orange.svg)](https://www.rust-lang.org)
 [![Bun](https://img.shields.io/badge/bun-1.0%2B-blue.svg)](https://bun.sh)
@@ -31,17 +31,24 @@ valkyrin sync --url postgresql://user:pass@localhost/db
 
 # 5. Push canvas changes to DB (with safety checks)
 valkyrin push --url postgresql://user:pass@localhost/db --confirm
+
+# 6. Validate schema (CI/CD friendly)
+valkyrin check validate --strict
+
+# 7. Machine-readable errors for CI/CD
+valkyrin --json sync --url postgresql://.../db
 ```
 
 ## Supported Targets
 
-| Language | ORMs | Native Features |
-|----------|------|-----------------|
+| Language | ORMs | Notes |
+|----------|------|-------|
 | Go | GORM, Ent | Native PG enums, UUID, shopspring/decimal |
-| Python | SQLModel, SQLAlchemy | Optional[], Relationship(), Enum |
-| Rust | Diesel, SeaORM | Queryable/Insertable, FromSqlRow/ToSql |
+| Python | SQLModel, SQLAlchemy | Optional[], Relationship(), Enum classes |
+| Rust | Diesel, SeaORM | Queryable/Insertable, FromSqlRow/ToSql, ActiveEnum |
 | JavaScript | Sequelize, TypeORM | DataTypes, decorators, junction tables |
-| TypeScript | Prisma, TypeORM | schema.prisma, @@relation, strict types |
+| TypeScript | Prisma, TypeORM | schema.prisma, @@relation, decorators |
+| **TypeScript** | **Valkyrin** | **Full type-safe client**: `ValkyrinClient`, `PgDialect`, entity delegates, type-level Select/Include/Omit/Where/Create/Update, SQL AST builder |
 
 ## Architecture Diagram
 
@@ -52,28 +59,37 @@ flowchart TB
     end
 
     subgraph Core["valkyrin-core"]
-        CanvasJSON["Canvas JSON"]
+        CanvasJSON["Canvas JSON\nschema.vdb.json"]
         IR["IR: EntityGraph"]
         
         subgraph Compiler["Compiler Pipeline"]
-            Pass1["Pass 1: Parser"]
-            Pass2["Pass 2: Constraint\nInjector"]
-            FKJunction["FK Columns +\nJunction Tables"]
-            ASTMerger["AST Merger\n(preserves custom code)"]
-            Validator["Validator\n(VAL-001..VAL-021)"]
+            Pass1["Pass 1: Parse &\nDeduplicate"]
+            Pass2["Pass 2: FK Injector\n+ Junction Tables"]
+            ASTMerger["AST Merger\ntree-sitter / string"]
+            Reserved["Reserved Word\nProtection"]
+            Prune["Diff-and-Prune\nOrphan Cleanup"]
             Drivers["10 Language Drivers"]
         end
         
         subgraph Sync["Sync Engine"]
-            Diff["Diff Engine"]
-            Spatial["Spatial Layout\nInjector"]
+            Intro["DB Introspector\nPG / MySQL / SQLite"]
+            Diff["Bidirectional\nDiff Engine"]
+            ResourceSpan["ResourceSpan\nData-Loss Prediction"]
+            Spatial["Safe Spawn\nPoint Calc"]
         end
         
         subgraph Migration["Migration Engine"]
-            DAG["DAG Topological\nSort"]
-            Checkpoints["Statement\nCheckpoints"]
-            ValkyrinSum["valkyrin.sum\n(chained SHA-256)"]
-            MigrationsTable["_valkyrin_migrations\ntable"]
+            MigTable["_valkyrin_migrations\ntable"]
+            ValkyrinSum["valkyrin.sum\nChained SHA-256"]
+            TamperDetect["Tamper Detection\n5 cases"]
+            SQLParser["SQL Statement\nState-machine Parser"]
+            StmtHash["Statement-level\nHashes"]
+            ExecOrder["Execution Order\nEnforcement"]
+        end
+
+        subgraph Validate["Schema Validator"]
+            Rules["6 Validation Rules"]
+            StrictMode["--strict mode"]
         end
     end
 
@@ -85,10 +101,10 @@ flowchart TB
     end
 
     subgraph UI["valkyrin-ui (React Flow)"]
-        TableNode["TableNode"]
-        Props["PropertiesSidebar"]
-        Edge["RelationEdge\n1:N / 1:1 / M:N"]
-        AutoSave["Auto-save 2s"]
+        TableNode["TableNode\nconstraint badges"]
+        Props["PropertiesSidebar\nreal-time validation"]
+        Edge["RelationEdge\n1:1 / 1:N / M:N"]
+        AutoSave["Auto-save 2s\n+ Ctrl+S"]
     end
 
     subgraph External["External Actors"]
@@ -98,32 +114,36 @@ flowchart TB
     end
 
     SchemaVDB["schema.vdb.json"]
-    Output["models/*.go,py,rs,ts,js,prisma"]
+    Output["models/*.{go,py,rs,ts,js,prisma}"]
+    ClientOut["models/valkyrin-client/\n{enums,types,operations,\nclient,index}.ts"]
 
     Commands --> CanvasJSON
-    
     CanvasJSON --> IR
     IR --> Pass1
-    Pass1 --> Pass2
-    Pass2 --> FKJunction
-    FKJunction --> IR
-    IR --> Drivers
-    IR --> ASTMerger
-    IR --> Validator
+    Pass1 --> Reserved
+    Reserved --> Pass2
+    Pass2 --> ASTMerger
+    ASTMerger --> Drivers
+    IR --> Validate
+    Validate --> Rules
+    Rules --> StrictMode
 
-    CanvasJSON --> Diff
-    Diff --> IR
-    Diff --> Spatial
+    Intro --> Diff
+    Intro <--> PG
+    Intro <--> MySQL
+    Intro <--> SQLite
+    Diff --> ResourceSpan
+    ResourceSpan --> Spatial
     Spatial --> SchemaVDB
-    Diff <--> PG
-    Diff <--> MySQL
-    Diff <--> SQLite
 
-    Drivers --> DAG
-    DAG --> Checkpoints
-    Checkpoints --> ValkyrinSum
-    Checkpoints --> MigrationsTable
-    ValkyrinSum --> MigrationsTable
+    MigTable --> ValkyrinSum
+    ValkyrinSum --> TamperDetect
+    TamperDetect --> SQLParser
+    SQLParser --> StmtHash
+    StmtHash --> ExecOrder
+    ExecOrder --> PG
+    ExecOrder --> MySQL
+    ExecOrder --> SQLite
 
     Axum --> Embed
     Axum --> APILoad
@@ -136,6 +156,10 @@ flowchart TB
     AutoSave --> SchemaVDB
 
     Drivers --> Output
+    Drivers --> Prune
+    Prune --> Output
+
+    Drivers -. TypeScriptValkyrin .-> ClientOut
 
     classDef cli fill:#1e293b,stroke:#64748b,stroke-width:2px,color:#f1f5f9;
     classDef core fill:#1e3a5f,stroke:#3b82f6,stroke-width:2px,color:#dbeafe;
@@ -149,7 +173,7 @@ flowchart TB
     class Server server;
     class UI ui;
     class External ext;
-    class IR,CanvasJSON,SchemaVDB,Output data;
+    class IR,CanvasJSON,SchemaVDB,Output,ClientOut data;
 ```
 
 ## Core Features Deep-Dive
@@ -170,22 +194,32 @@ func (u *User) FullName() string {
 // valkyrin:custom_methods_end
 ```
 
-After `valkyrin generate` — struct regenerates, your `FullName()` method preserved intact. Uses tree-sitter (Go/Python) or string fallback (Rust/JS/TS/Prisma).
+After `valkyrin generate` — struct regenerates, your `FullName()` method preserved intact.
+- **Go, Python**: Uses `tree-sitter` to parse AST and locate markers
+- **Rust, JS, TS, Prisma**: String-based fallback with comment markers
 
-### B. Bidirectional Sync with Spatial Memory
+### B. Bidirectional Diff Engine
 
 - `valkyrin sync --url <db>` → introspects live DB, diffs against canvas
-- New tables injected at calculated safe spawn points (never overlap existing layout)
-- FK relations detected from `information_schema` → drawn as interactive edges
-- `schema.vdb.json` updated with positions preserved
+- Column-level comparison: type changes, nullable changes, unique changes, default value changes, enum value additions
+- New tables injected at calculated safe spawn positions (never overlap existing layout)
+- FK relations detected from `information_schema` / `PRAGMA foreign_key_list` → drawn as interactive edges
+- `schema.vdb.json` updated with positions and relations preserved
 
 ### C. Relational Edge Engine — Visual Edges → Real FKs
 
 - Draw edge between tables → click badge to cycle 1:N → 1:1 → M:N
 - Compiler Pass 2 mathematically injects FK columns:
-  - 1:N → `user_id` on target
-  - M:N → auto-generates junction table (`user_group`) with composite PK
-- Generated code includes ORM-specific relation helpers (`belongs_to`, `has_many`, `many2many`)
+  - 1:N → `table_id` on target entity
+  - M:N → auto-generates junction table with composite PK (alphabetically sorted name)
+- Generated code includes ORM-specific relation helpers:
+  - GORM: `gorm:"foreignKey:...;references:..."`
+  - Ent: `field.ToMany()`, `field.BelongsTo()`
+  - SQLModel: `Relationship(back_populates=...)`
+  - Diesel: `joinable!()` macro
+  - SeaORM: `Related` trait links
+  - Prisma: `@relation()` attributes
+  - TypeORM: `@OneToMany`/`@ManyToOne`/`@JoinColumn` decorators
 
 ### D. Enterprise Migration Engine (valkyrin.sum)
 
@@ -196,36 +230,95 @@ h1:7P3nY...Q==                    ← Directory root hash
 20250102130000_add_users.sql h1:def...==
 ```
 
-- Tamper detection (4 cases): Removed / Edited / Injected / Appended
-- Statement-level checkpoints: SQL parsed by state machine (handles `$tag$`, `DELIMITER`, `BEGIN...END`)
-- MySQL-safe: Each statement tracked in `_valkyrin_migrations` with `applied_statements` + `partial_hashes`
-- Resume on failure: Re-run picks up exactly at failed statement
+- **Chained hashing**: Each file's hash incorporates the previous file's hash (tamper-evident ordering)
+- **5 tamper detection cases**: Removed / Edited / Injected / Appended / ChecksumNotFound
+- **SQL statement parser**: State-machine handles `$tag$` dollar quoting, `DELIMITER` (MySQL), `BEGIN...END` blocks, parentheses depth, quoted strings, backtick identifiers, line/block comments, `#` comments (MySQL)
+- **Statement-level checkpoints**: Each statement tracked with chained hash; resume on failure picks up exactly at the failed statement
+- **Execution order enforcement**: Rejects gaps and non-linear migration histories (VAL-020)
+- **Per-DBMS locking**: PostgreSQL advisory locks, MySQL `GET_LOCK()`, SQLite file locks
 
 ### E. Predictive Data-Loss Prevention (ResourceSpan)
 
-**ResourceSpan** (2-bit bitmask):
-- 0 = Unknown    (existed before, no changes)
-- 1 = Added      (created in this diff)
-- 2 = Dropped    (being dropped)
-- 3 = Temporary  (Added | Dropped — created AND dropped same diff)
+**ResourceSpan** (2-bit bitmask lifecycle tracking):
+- `00` = Unknown    (existed before, no changes in this diff)
+- `01` = Added      (created in this diff)
+- `10` = Dropped    (being dropped in this diff)
+- `11` = Temporary  (Added|Dropped — created AND dropped same diff, no-op)
 
-- Single pre-pass computes spans for all tables/columns/indexes/FKs
-- Live DB checks (async sqlx):
-  - `DROP TABLE`: `SELECT 1 FROM "table" LIMIT 1` → empty = safe
-  - `DROP COLUMN`: `SELECT 1 WHERE col IS NOT NULL LIMIT 1` → all NULL = safe
-- Only demands `--confirm` when actual data loss detected (VAL-019)
+Single pre-pass computes spans for all tables, columns, indexes, and foreign keys.
+Live DB checks via async sqlx:
+- `DROP TABLE`: `SELECT 1 FROM "table" LIMIT 1` → empty = safe
+- `DROP COLUMN`: `SELECT 1 WHERE col IS NOT NULL LIMIT 1` → all NULL = safe
 
-### F. DAG Topological Sorting — Zero-Deadlock Migrations
+Only demands `--confirm` when actual data loss is detected (VAL-019).
 
-- Schema changes → Directed Acyclic Graph
-- Emits `DROP CONSTRAINT` before `DROP TABLE`
-- Resolves circular FK dependencies mathematically
+### F. TypeScriptValkyrin — Full Type-Safe Client Generation
+
+Generates a complete database client (not just models):
+
+```
+models/valkyrin-client/
+├── enums.ts         # $Enums namespace with union types
+├── types.ts         # Type-level machinery: _GetFindResult, _DefaultSelection, _ApplyOmit, ValkyrinExtensions
+├── operations.ts    # Per-entity: Payload, Select, Include, Omit, WhereInput, OrderByInput,
+                    #   CreateInput, UpdateInput, FindUnique/Many/Create/Update/Delete/Upsert/Aggregate/GroupBy args
+├── client.ts        # Runtime: ValkyrinClient class, entity delegates (findUnique, findMany, count),
+                    #   SQL AST types (Column, SelectQuery, WhereNode, Join, OrderBy),
+                    #   PgDialect (PostgreSQL parameterized query builder)
+└── index.ts         # Barrel exports
+```
+
+```typescript
+import { ValkyrinClient, PgDialect } from './valkyrin-client';
+
+const client = new ValkyrinClient(new PgDialect(), dbConnection);
+
+// Type-safe queries
+const user = await client.user.findUnique({
+  where: { id: "abc-123" },
+  select: { scalars: { name: true, email: true } },
+});
+
+const posts = await client.post.findMany({
+  where: {
+    scalars: { published: { equals: true } },
+    objects: { author: { is: { scalars: { name: { equals: "Alice" } } } } },
+  },
+  take: 10,
+});
+```
+
+### G. Schema Validation — 6 Rules
+
+| Rule | Description | Severity |
+|------|-------------|----------|
+| NoNullablePk | Primary key columns must not be nullable | Error |
+| FkIndexed | Foreign key fields (ending in `_id`) should be indexed | Warning |
+| EnumHasValues | Enum types must have at least one value | Warning |
+| NoDuplicateEntities | Case-insensitive duplicate table names | Warning |
+| NoReservedNames | SQL/language keywords as table/column names | Warning |
+| TableHasColumns | Tables must have at least one column | Warning |
+
+Run with `--strict` to promote all warnings to errors (exit code 2).
+
+### H. UI Production Features
+
+- **PropertiesSidebar**: Right-side edit panel with real-time validation on every keystroke — identifier regex check (`/^[a-zA-Z_][a-zA-Z0-9_]*$/`), duplicate detection, decimal precision/scale bounds (1-65), enum value validation
+- **Auto-save**: 2-second debounced auto-save + Ctrl+S keyboard shortcut
+- **RelationEdge**: Interactive badge on every edge — click to cycle `1:1` → `1:N` → `M:N` with hover tooltip
+- **TableNode**: Gradient header, constraint badges (PK=yellow, U=purple, IDX=blue, Ø=nullable, D=default), hover-reveal delete buttons
+- **Dark theme**: `bg-zinc-950` canvas with `#27272a` grid background, cyan accent highlights
+- **Toast notifications**: Sonner toast library for save confirmations and error feedback
+
+### I. Diff-and-Prune — Orphaned File Cleanup
+
+After every `valkyrin generate`, the compiler scans the `models/` directory for managed extensions (`.go`, `.py`, `.rs`, `.ts`, `.js`, `.prisma`) and **automatically removes** any file whose stem doesn't match a current entity name. This prevents stale model files from accumulating when tables are renamed or removed.
 
 ## Configuration (valkyrin.yaml)
 
 ```yaml
 language: go              # go | python | rust | typescript | javascript
-orm: gorm                 # gorm/ent | sqlmodel/sqlalchemy | diesel/seaorm | prisma/typeorm | sequelize/typeorm
+orm: gorm                 # gorm/ent | sqlmodel/sqlalchemy | diesel/seaorm | prisma/typeorm/valkyrin | sequelize/typeorm
 database_url_env: DATABASE_URL
 environments:
   dev:
@@ -236,8 +329,8 @@ environments:
     output_dir: ./models/prod
 ```
 
-- Validation: rejects unsupported language/ORM combos
-- `--env` flag selects environment
+- Validation rejects unsupported language/ORM combinations at load time
+- `--env` flag selects environment (resolves per-env `.env.<env>` files)
 
 ## CLI Reference
 
@@ -248,9 +341,11 @@ environments:
 | `generate` | Compile blueprint → ORM code in `models/` | — |
 | `sync` | DB → Canvas: introspect, diff, inject new tables | `--url`, `--db-type`, `--confirm`, `--dry-run` |
 | `migrate` | Apply pending migrations from `migrations/` | `--url`, `--db-type`, `--file` |
-| `push` | Canvas → DB: apply changes, create migration files | `--url`, `--db-type`, `--confirm`, `--dry-run` |
-| `check` | Dry-run diff or schema validation | `--url`, `--db-type`, `validate --strict` |
+| `push` | Canvas → DB: generate DDL and execute | `--url`, `--db-type`, `--confirm`, `--dry-run` |
+| `check` | Dry-run sync diff or schema validation | `--url`, `--db-type`, `validate --strict` |
 | `rollback` | Revert last N migrations via DOWN SQL | `--url`, `--db-type`, `--steps N`, `--dry-run` |
+
+Global flags: `--json` outputs structured JSON errors for CI/CD integration.
 
 ## Generated Code Examples
 
@@ -272,9 +367,36 @@ type User struct {
 	Balance   decimal.Decimal `gorm:"column:balance;type:numeric(10,2)" json:"balance"`
 	Metadata  datatypes.JSON  `gorm:"column:metadata" json:"metadata"`
 	CreatedAt time.Time       `gorm:"column:created_at" json:"created_at"`
-	
-	// Relations (injected by Pass 2)
-	Posts []Post `gorm:"foreignKey:UserID;references:ID" json:"posts,omitempty"`
+	Posts     []Post          `gorm:"foreignKey:UserID;references:ID" json:"posts,omitempty"`
+}
+```
+
+### Go (Ent)
+
+```go
+package models
+
+import (
+	"entgo.io/ent"
+	"entgo.io/ent/schema/field"
+	"github.com/google/uuid"
+)
+
+type User struct {
+	ent.Schema
+}
+
+func (User) Fields() []ent.Field {
+	return []ent.Field{
+		field.UUID("id", uuid.UUID{}).
+			Default(uuid.New).
+			StorageKey("id"),
+		field.String("email").
+			Unique().
+			StorageKey("email"),
+		field.Time("created_at").
+			StorageKey("created_at"),
+	}
 }
 ```
 
@@ -292,14 +414,11 @@ class UserStatus(str, Enum):
     INACTIVE = "inactive"
 
 class User(SQLModel, table=True):
-    __tablename__ = "users"
-    
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     email: str = Field(unique=True, index=True)
-    balance: Decimal = Field(default=0, sa_column=Column(Numeric(10, 2)))
+    balance: Decimal = Field(default=0)
     status: UserStatus = Field(default=UserStatus.ACTIVE)
     created_at: datetime = Field(default_factory=datetime.utcnow)
-    
     posts: list["Post"] = Relationship(back_populates="user")
 ```
 
@@ -318,7 +437,7 @@ pub struct User {
     pub id: Uuid,
     pub email: String,
     pub balance: BigDecimal,
-    pub status: UserStatusEnum,  // Native PG enum or generated enum
+    pub status: UserStatusEnum,
     pub created_at: NaiveDateTime,
 }
 
@@ -335,14 +454,12 @@ impl User {
 
 ```prisma
 model User {
-  id        String   @id @default(uuid())
-  email     String   @unique
-  balance   Decimal  @db.Decimal(10, 2)
+  id        String    @id @default(uuid())
+  email     String    @unique
+  balance   Decimal   @db.Decimal(10, 2)
   status    UserStatus @default(ACTIVE)
-  createdAt DateTime @default(now()) @map("created_at")
-  
+  createdAt DateTime  @default(now()) @map("created_at")
   posts     Post[]
-  
   @@map("users")
 }
 
@@ -350,6 +467,39 @@ enum UserStatus {
   ACTIVE
   INACTIVE
 }
+```
+
+### TypeScript (Valkyrin Client)
+
+```typescript
+import { ValkyrinClient, PgDialect, DatabaseConnection } from './valkyrin-client';
+
+// Use with any PostgreSQL driver
+const conn: DatabaseConnection = {
+  async query(sql, params) {
+    const result = await pgPool.query(sql, params);
+    return { rows: result.rows };
+  },
+};
+
+const client = new ValkyrinClient(new PgDialect(), conn);
+
+// Type-safe findUnique
+const user = await client.user.findUnique({
+  where: { id: "123e4567-e89b-12d3-a456-426614174000" },
+  select: { scalars: { name: true, email: true } },
+});
+
+// Type-safe findMany with relations
+const posts = await client.post.findMany({
+  where: {
+    scalars: { published: { equals: true } },
+    objects: { author: { is: { scalars: { name: { equals: "Alice" } } } } },
+  },
+  orderBy: { scalars: { createdAt: "desc" } },
+  take: 10,
+  include: { objects: { comments: true } },
+});
 ```
 
 ## Error Codes (VAL-001 to VAL-021)
@@ -378,7 +528,7 @@ enum UserStatus {
 | VAL-020 | HistoryNonLinear | 2 | Skipped migration versions |
 | VAL-021 | StatementExecError | 2 | Individual SQL failed |
 
-JSON output: `valkyrin --json migrate ...` → `{"code":"VAL-019","message":"...","exit_code":2}`
+JSON output: `valkyrin --json sync --url postgresql://...` → `{"code":"VAL-019","message":"...","exit_code":2}`
 
 ## Build Instructions
 
@@ -388,12 +538,13 @@ cd valkyrin-ui && bun install && bun run dev
 # Terminal 2:
 cargo run -- canvas
 
-# Release (UI MUST build FIRST - embedded via rust-embed)
+# Release (UI MUST build FIRST — embedded via rust-embed)
 cd valkyrin-ui && bun install && bun run build
 cd .. && cargo build --release
-# Binary: target/release/valkyrin-cli
+# Binary: target/release/valkyrin-cli  (note: NOT just "valkyrin")
 
 # CI: .github/workflows/release.yml
 # opt-level="z", lto="fat", strip=true, panic="abort"
+# Rust edition 2024 (requires rustc 1.92+)
 # Cross-compiles: Linux x86_64/aarch64, macOS x86_64/aarch64, Windows x86_64
 ```
