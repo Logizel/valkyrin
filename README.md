@@ -1,6 +1,6 @@
 # Valkyrin
 
-**Local-First Visual Database Architect** — Design schemas visually, generate production-ready ORM code for 10 targets.
+**Local-First Visual Database Architect**-Design schemas visually, generate production-ready ORM code for 10 targets.
 
 Single binary · Embedded React UI · Zero cloud · Zero AI · Zero telemetry
 
@@ -41,14 +41,14 @@ valkyrin --json sync --url postgresql://.../db
 
 ## Supported Targets
 
-| Language | ORMs | Notes |
-|----------|------|-------|
-| Go | GORM, Ent | Native PG enums, UUID, shopspring/decimal |
-| Python | SQLModel, SQLAlchemy | Optional[], Relationship(), Enum classes |
-| Rust | Diesel, SeaORM | Queryable/Insertable, FromSqlRow/ToSql, ActiveEnum |
-| JavaScript | Sequelize, TypeORM | DataTypes, decorators, junction tables |
-| TypeScript | Prisma, TypeORM | schema.prisma, @@relation, decorators |
-| **TypeScript** | **Valkyrin** | **Full type-safe client**: `ValkyrinClient`, `PgDialect`, entity delegates, type-level Select/Include/Omit/Where/Create/Update, SQL AST builder |
+| Language       | ORMs                 | Notes                                                                                                                                           |
+| -------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Go             | GORM, Ent            | Native PG enums, UUID, shopspring/decimal                                                                                                       |
+| Python         | SQLModel, SQLAlchemy | Optional[], Relationship(), Enum classes                                                                                                        |
+| Rust           | Diesel, SeaORM       | Queryable/Insertable, FromSqlRow/ToSql, ActiveEnum                                                                                              |
+| JavaScript     | Sequelize, TypeORM   | DataTypes, decorators, junction tables                                                                                                          |
+| TypeScript     | Prisma, TypeORM      | schema.prisma, @@relation, decorators                                                                                                           |
+| **TypeScript** | **Valkyrin**         | **Full type-safe client**: `ValkyrinClient`, `PgDialect`, entity delegates, type-level Select/Include/Omit/Where/Create/Update, SQL AST builder |
 
 ## Architecture Diagram
 
@@ -61,7 +61,7 @@ flowchart TB
     subgraph Core["valkyrin-core"]
         CanvasJSON["Canvas JSON\nschema.vdb.json"]
         IR["IR: EntityGraph"]
-        
+
         subgraph Compiler["Compiler Pipeline"]
             Pass1["Pass 1: Parse &\nDeduplicate"]
             Pass2["Pass 2: FK Injector\n+ Junction Tables"]
@@ -70,14 +70,14 @@ flowchart TB
             Prune["Diff-and-Prune\nOrphan Cleanup"]
             Drivers["10 Language Drivers"]
         end
-        
+
         subgraph Sync["Sync Engine"]
             Intro["DB Introspector\nPG / MySQL / SQLite"]
             Diff["Bidirectional\nDiff Engine"]
             ResourceSpan["ResourceSpan\nData-Loss Prediction"]
             Spatial["Safe Spawn\nPoint Calc"]
         end
-        
+
         subgraph Migration["Migration Engine"]
             MigTable["_valkyrin_migrations\ntable"]
             ValkyrinSum["valkyrin.sum\nChained SHA-256"]
@@ -167,7 +167,7 @@ flowchart TB
     classDef ui fill:#4c1d95,stroke:#a855f7,stroke-width:2px,color:#e9d5ff;
     classDef ext fill:#14532d,stroke:#22c55e,stroke-width:2px,color:#dcfce7;
     classDef data fill:#78350f,stroke:#f59e0b,stroke-width:3px,color:#fef3c7;
-    
+
     class CLI cli;
     class Core core;
     class Server server;
@@ -194,7 +194,8 @@ func (u *User) FullName() string {
 // valkyrin:custom_methods_end
 ```
 
-After `valkyrin generate` — struct regenerates, your `FullName()` method preserved intact.
+After `valkyrin generate` - struct regenerates, your `FullName()` method preserved intact.
+
 - **Go, Python**: Uses `tree-sitter` to parse AST and locate markers
 - **Rust, JS, TS, Prisma**: String-based fallback with comment markers
 
@@ -206,7 +207,7 @@ After `valkyrin generate` — struct regenerates, your `FullName()` method prese
 - FK relations detected from `information_schema` / `PRAGMA foreign_key_list` → drawn as interactive edges
 - `schema.vdb.json` updated with positions and relations preserved
 
-### C. Relational Edge Engine — Visual Edges → Real FKs
+### C. Relational Edge Engine - Visual Edges → Real FKs
 
 - Draw edge between tables → click badge to cycle 1:N → 1:1 → M:N
 - Compiler Pass 2 mathematically injects FK columns:
@@ -240,19 +241,21 @@ h1:7P3nY...Q==                    ← Directory root hash
 ### E. Predictive Data-Loss Prevention (ResourceSpan)
 
 **ResourceSpan** (2-bit bitmask lifecycle tracking):
-- `00` = Unknown    (existed before, no changes in this diff)
-- `01` = Added      (created in this diff)
-- `10` = Dropped    (being dropped in this diff)
-- `11` = Temporary  (Added|Dropped — created AND dropped same diff, no-op)
+
+- `00` = Unknown (existed before, no changes in this diff)
+- `01` = Added (created in this diff)
+- `10` = Dropped (being dropped in this diff)
+- `11` = Temporary (Added|Dropped — created AND dropped same diff, no-op)
 
 Single pre-pass computes spans for all tables, columns, indexes, and foreign keys.
 Live DB checks via async sqlx:
+
 - `DROP TABLE`: `SELECT 1 FROM "table" LIMIT 1` → empty = safe
 - `DROP COLUMN`: `SELECT 1 WHERE col IS NOT NULL LIMIT 1` → all NULL = safe
 
 Only demands `--confirm` when actual data loss is detected (VAL-019).
 
-### F. TypeScriptValkyrin — Full Type-Safe Client Generation
+### F. TypeScriptValkyrin - Full Type-Safe Client Generation
 
 Generates a complete database client (not just models):
 
@@ -269,7 +272,7 @@ models/valkyrin-client/
 ```
 
 ```typescript
-import { ValkyrinClient, PgDialect } from './valkyrin-client';
+import { ValkyrinClient, PgDialect } from "./valkyrin-client";
 
 const client = new ValkyrinClient(new PgDialect(), dbConnection);
 
@@ -288,16 +291,16 @@ const posts = await client.post.findMany({
 });
 ```
 
-### G. Schema Validation — 6 Rules
+### G. Schema Validation - 6 Rules
 
-| Rule | Description | Severity |
-|------|-------------|----------|
-| NoNullablePk | Primary key columns must not be nullable | Error |
-| FkIndexed | Foreign key fields (ending in `_id`) should be indexed | Warning |
-| EnumHasValues | Enum types must have at least one value | Warning |
-| NoDuplicateEntities | Case-insensitive duplicate table names | Warning |
-| NoReservedNames | SQL/language keywords as table/column names | Warning |
-| TableHasColumns | Tables must have at least one column | Warning |
+| Rule                | Description                                            | Severity |
+| ------------------- | ------------------------------------------------------ | -------- |
+| NoNullablePk        | Primary key columns must not be nullable               | Error    |
+| FkIndexed           | Foreign key fields (ending in `_id`) should be indexed | Warning  |
+| EnumHasValues       | Enum types must have at least one value                | Warning  |
+| NoDuplicateEntities | Case-insensitive duplicate table names                 | Warning  |
+| NoReservedNames     | SQL/language keywords as table/column names            | Warning  |
+| TableHasColumns     | Tables must have at least one column                   | Warning  |
 
 Run with `--strict` to promote all warnings to errors (exit code 2).
 
@@ -310,15 +313,15 @@ Run with `--strict` to promote all warnings to errors (exit code 2).
 - **Dark theme**: `bg-zinc-950` canvas with `#27272a` grid background, cyan accent highlights
 - **Toast notifications**: Sonner toast library for save confirmations and error feedback
 
-### I. Diff-and-Prune — Orphaned File Cleanup
+### I. Diff-and-Prune - Orphaned File Cleanup
 
 After every `valkyrin generate`, the compiler scans the `models/` directory for managed extensions (`.go`, `.py`, `.rs`, `.ts`, `.js`, `.prisma`) and **automatically removes** any file whose stem doesn't match a current entity name. This prevents stale model files from accumulating when tables are renamed or removed.
 
 ## Configuration (valkyrin.yaml)
 
 ```yaml
-language: go              # go | python | rust | typescript | javascript
-orm: gorm                 # gorm/ent | sqlmodel/sqlalchemy | diesel/seaorm | prisma/typeorm/valkyrin | sequelize/typeorm
+language: go # go | python | rust | typescript | javascript
+orm: gorm # gorm/ent | sqlmodel/sqlalchemy | diesel/seaorm | prisma/typeorm/valkyrin | sequelize/typeorm
 database_url_env: DATABASE_URL
 environments:
   dev:
@@ -334,16 +337,16 @@ environments:
 
 ## CLI Reference
 
-| Command | Description | Key Flags |
-|---------|-------------|-----------|
-| `init` | Scaffold `valkyrin.yaml`, empty `schema.vdb.json`, `models/` | — |
-| `canvas` | Start embedded React UI at localhost:3000 | — |
-| `generate` | Compile blueprint → ORM code in `models/` | — |
-| `sync` | DB → Canvas: introspect, diff, inject new tables | `--url`, `--db-type`, `--confirm`, `--dry-run` |
-| `migrate` | Apply pending migrations from `migrations/` | `--url`, `--db-type`, `--file` |
-| `push` | Canvas → DB: generate DDL and execute | `--url`, `--db-type`, `--confirm`, `--dry-run` |
-| `check` | Dry-run sync diff or schema validation | `--url`, `--db-type`, `validate --strict` |
-| `rollback` | Revert last N migrations via DOWN SQL | `--url`, `--db-type`, `--steps N`, `--dry-run` |
+| Command    | Description                                                  | Key Flags                                      |
+| ---------- | ------------------------------------------------------------ | ---------------------------------------------- |
+| `init`     | Scaffold `valkyrin.yaml`, empty `schema.vdb.json`, `models/` | —                                              |
+| `canvas`   | Start embedded React UI at localhost:3000                    | —                                              |
+| `generate` | Compile blueprint → ORM code in `models/`                    | —                                              |
+| `sync`     | DB → Canvas: introspect, diff, inject new tables             | `--url`, `--db-type`, `--confirm`, `--dry-run` |
+| `migrate`  | Apply pending migrations from `migrations/`                  | `--url`, `--db-type`, `--file`                 |
+| `push`     | Canvas → DB: generate DDL and execute                        | `--url`, `--db-type`, `--confirm`, `--dry-run` |
+| `check`    | Dry-run sync diff or schema validation                       | `--url`, `--db-type`, `validate --strict`      |
+| `rollback` | Revert last N migrations via DOWN SQL                        | `--url`, `--db-type`, `--steps N`, `--dry-run` |
 
 Global flags: `--json` outputs structured JSON errors for CI/CD integration.
 
@@ -472,7 +475,11 @@ enum UserStatus {
 ### TypeScript (Valkyrin Client)
 
 ```typescript
-import { ValkyrinClient, PgDialect, DatabaseConnection } from './valkyrin-client';
+import {
+  ValkyrinClient,
+  PgDialect,
+  DatabaseConnection,
+} from "./valkyrin-client";
 
 // Use with any PostgreSQL driver
 const conn: DatabaseConnection = {
@@ -504,29 +511,29 @@ const posts = await client.post.findMany({
 
 ## Error Codes (VAL-001 to VAL-021)
 
-| Code | Name | Exit | Description |
-|------|------|------|-------------|
-| VAL-001 | Config | 2 | YAML parse, unsupported language/ORM |
-| VAL-002 | Schema | 2 | Invalid schema structure |
-| VAL-003 | Database | 2 | Connection failed |
-| VAL-004 | Migration | 2 | Apply/rollback failure |
-| VAL-005 | Codegen | 2 | Template/render error |
-| VAL-006 | Io | 2 | File read/write |
-| VAL-007 | Parse | 2 | JSON/YAML/SQL parse |
-| VAL-008 | Validation | 1 | Schema warnings (errors with `--strict`) |
-| VAL-009 | Introspection | 2 | DB schema fetch failed |
-| VAL-010 | Sync | 2 | Diff/sync failure |
-| VAL-011 | CliArg | 2 | Invalid CLI arguments |
-| VAL-012 | Internal | 2 | Unexpected bug |
-| VAL-013 | ChecksumMismatch | 2 | Migration modified after apply |
-| VAL-014 | HistoryTampered | 2 | `valkyrin.sum` integrity violation |
-| VAL-015 | MigrationRemoved | 2 | Migration file deleted |
-| VAL-016 | MigrationEdited | 2 | Migration file edited |
-| VAL-017 | MigrationInjected | 2 | Migration inserted out-of-order |
-| VAL-018 | ChecksumNotFound | 2 | `valkyrin.sum` missing |
-| VAL-019 | DestructiveChange | 2 | Live data would be lost |
-| VAL-020 | HistoryNonLinear | 2 | Skipped migration versions |
-| VAL-021 | StatementExecError | 2 | Individual SQL failed |
+| Code    | Name               | Exit | Description                              |
+| ------- | ------------------ | ---- | ---------------------------------------- |
+| VAL-001 | Config             | 2    | YAML parse, unsupported language/ORM     |
+| VAL-002 | Schema             | 2    | Invalid schema structure                 |
+| VAL-003 | Database           | 2    | Connection failed                        |
+| VAL-004 | Migration          | 2    | Apply/rollback failure                   |
+| VAL-005 | Codegen            | 2    | Template/render error                    |
+| VAL-006 | Io                 | 2    | File read/write                          |
+| VAL-007 | Parse              | 2    | JSON/YAML/SQL parse                      |
+| VAL-008 | Validation         | 1    | Schema warnings (errors with `--strict`) |
+| VAL-009 | Introspection      | 2    | DB schema fetch failed                   |
+| VAL-010 | Sync               | 2    | Diff/sync failure                        |
+| VAL-011 | CliArg             | 2    | Invalid CLI arguments                    |
+| VAL-012 | Internal           | 2    | Unexpected bug                           |
+| VAL-013 | ChecksumMismatch   | 2    | Migration modified after apply           |
+| VAL-014 | HistoryTampered    | 2    | `valkyrin.sum` integrity violation       |
+| VAL-015 | MigrationRemoved   | 2    | Migration file deleted                   |
+| VAL-016 | MigrationEdited    | 2    | Migration file edited                    |
+| VAL-017 | MigrationInjected  | 2    | Migration inserted out-of-order          |
+| VAL-018 | ChecksumNotFound   | 2    | `valkyrin.sum` missing                   |
+| VAL-019 | DestructiveChange  | 2    | Live data would be lost                  |
+| VAL-020 | HistoryNonLinear   | 2    | Skipped migration versions               |
+| VAL-021 | StatementExecError | 2    | Individual SQL failed                    |
 
 JSON output: `valkyrin --json sync --url postgresql://...` → `{"code":"VAL-019","message":"...","exit_code":2}`
 
